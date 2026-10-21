@@ -1,0 +1,10 @@
+# Build output
+/wiser-dashboard
+/dist/
+
+# Local settings and data, in case they're ever kept next to the code
+config.json
+history.jsonl
+*_secret.txt
+
+.DS_Store

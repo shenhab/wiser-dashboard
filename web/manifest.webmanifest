@@ -1,0 +1,9 @@
+{
+  "name": "Wiser Home Heating",
+  "short_name": "Heating",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111214",
+  "theme_color": "#eb6834",
+  "icons": [{"src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
+}

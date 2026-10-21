@@ -1,0 +1,312 @@
+package main
+
+import (
+	"context"
+	"crypto/subtle"
+	"embed"
+	"encoding/json"
+	"io/fs"
+	"log"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+//go:embed web
+var webFS embed.FS
+
+type Server struct {
+	hub        *Hub
+	store      *Store
+	poller     *Poller
+	history    *History
+	configPath string
+	password   string
+
+	mu          sync.Mutex
+	labels      map[string]string // heating channel id -> display name
+	candidates  []Candidate
+	discovering bool
+	lastScan    time.Time
+}
+
+func (s *Server) routes() http.Handler {
+	mux := http.NewServeMux()
+	static, _ := fs.Sub(webFS, "web")
+	mux.Handle("GET /", http.FileServer(http.FS(static)))
+	mux.HandleFunc("GET /api/state", s.handleState)
+	mux.HandleFunc("POST /api/request", s.handleRequest)
+	mux.HandleFunc("POST /api/refresh", s.handleRefresh)
+	mux.HandleFunc("POST /api/channel-name", s.handleChannelName)
+	mux.HandleFunc("POST /api/room-zone", s.handleRoomZone)
+	mux.HandleFunc("GET /api/history", s.handleHistory)
+	mux.HandleFunc("GET /api/setup", s.handleSetup)
+	mux.HandleFunc("POST /api/setup/discover", s.handleDiscover)
+	mux.HandleFunc("POST /api/setup/fetch-secret", s.handleFetchSecret)
+	mux.HandleFunc("POST /api/setup/save", s.handleSave)
+	if s.password == "" {
+		return mux
+	}
+	return s.basicAuth(mux)
+}
+
+func (s *Server) basicAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pw, ok := r.BasicAuth()
+		if !ok || subtle.ConstantTimeCompare([]byte(pw), []byte(s.password)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Wiser dashboard"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
+	ip, secret := s.hub.Target()
+	s.mu.Lock()
+	labels := make(map[string]string, len(s.labels))
+	for k, v := range s.labels {
+		labels[k] = v
+	}
+	s.mu.Unlock()
+	writeJSON(w, 200, map[string]any{
+		"configured":   ip != "" && secret != "",
+		"hubIP":        ip,
+		"channelNames": labels,
+		"queue":        s.hub.queued.Load(),
+		"busy":         s.hub.busy.Load(),
+		"sections":     s.store.Snapshot(),
+		"extras":       s.poller.Extras(),
+		"now":          time.Now(),
+	})
+}
+
+type rawRequest struct {
+	Method  string          `json:"method"`
+	Path    string          `json:"path"`
+	Body    json.RawMessage `json:"body,omitempty"`
+	RawBody string          `json:"rawBody,omitempty"`
+}
+
+// handleRequest passes any request straight to the hub: this is what gives
+// the UI (and the console) full control of every endpoint.
+func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
+	var req rawRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad request: " + err.Error()})
+		return
+	}
+	req.Method = strings.ToUpper(strings.TrimSpace(req.Method))
+	if req.Method == "" {
+		req.Method = "GET"
+	}
+	if !strings.HasPrefix(req.Path, "/") {
+		writeJSON(w, 400, map[string]string{"error": "path must start with /"})
+		return
+	}
+	body := []byte(req.RawBody)
+	if len(body) == 0 && len(req.Body) > 0 && string(req.Body) != "null" {
+		body = req.Body
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	res := s.hub.Do(ctx, req.Method, req.Path, body, true)
+
+	out := map[string]any{"status": res.Status, "body": string(res.Body), "ms": res.Dur.Milliseconds()}
+	if res.Err != nil {
+		out["error"] = res.Err.Error()
+	}
+	if req.Method != "GET" {
+		log.Printf("%s %s -> %d %v", req.Method, req.Path, res.Status, res.Err)
+		if res.Err == nil && res.Status >= 200 && res.Status < 300 {
+			if sec := s.store.MergeWrite(req.Path, res.Body); sec != "" {
+				s.poller.Refresh(sec)
+			}
+		}
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Section string `json:"section"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	s.poller.Refresh(req.Section)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// handleHistory serves recorded samples (?hours=24, max 14 days) and the
+// per-day relay runtime (?days=7).
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	hours, err := strconv.Atoi(r.URL.Query().Get("hours"))
+	if err != nil || hours <= 0 {
+		hours = 24
+	}
+	hours = min(hours, historyDays*24)
+	days, err := strconv.Atoi(r.URL.Query().Get("days"))
+	if err != nil || days <= 0 {
+		days = 7
+	}
+	days = min(days, historyDays)
+	writeJSON(w, 200, map[string]any{
+		"samples": s.history.Since(time.Now().Add(-time.Duration(hours)*time.Hour), 1500),
+		"runtime": s.history.Runtime(days),
+	})
+}
+
+func (s *Server) handleChannelName(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": "id is required"})
+		return
+	}
+	s.mu.Lock()
+	if s.labels == nil {
+		s.labels = map[string]string{}
+	}
+	if name := strings.TrimSpace(req.Name); name == "" {
+		delete(s.labels, req.ID) // back to the hub's name
+	} else {
+		s.labels[req.ID] = name
+	}
+	s.mu.Unlock()
+	ip, secret := s.hub.Target()
+	if err := s.save(ip, secret); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
+	ip, secret := s.hub.Target()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	writeJSON(w, 200, map[string]any{
+		"hubIP":       ip,
+		"hasSecret":   secret != "",
+		"candidates":  s.candidates,
+		"discovering": s.discovering,
+		"configPath":  s.configPath,
+	})
+}
+
+// runDiscovery is shared by startup and the setup page.
+func (s *Server) runDiscovery(ctx context.Context) []Candidate {
+	s.mu.Lock()
+	if s.discovering {
+		s.mu.Unlock()
+		for {
+			time.Sleep(500 * time.Millisecond)
+			s.mu.Lock()
+			if !s.discovering {
+				c := s.candidates
+				s.mu.Unlock()
+				return c
+			}
+			s.mu.Unlock()
+		}
+	}
+	s.discovering = true
+	s.mu.Unlock()
+
+	_, secret := s.hub.Target()
+	c := discover(ctx, secret)
+
+	s.mu.Lock()
+	s.candidates, s.discovering, s.lastScan = c, false, time.Now()
+	s.mu.Unlock()
+	return c
+}
+
+func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{"candidates": s.runDiscovery(r.Context())})
+}
+
+func (s *Server) handleFetchSecret(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IP string `json:"ip"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.IP == "" {
+		req.IP, _ = s.hub.Target()
+	}
+	secret, from, err := fetchSecret(req.IP)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	// Keep the secret server-side; the browser never sees it.
+	if req.IP == "" {
+		req.IP = from
+	}
+	if err := s.apply(req.IP, secret); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "from": from})
+}
+
+func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IP     string `json:"ip"`
+		Secret string `json:"secret"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	req.IP, req.Secret = strings.TrimSpace(req.IP), strings.TrimSpace(req.Secret)
+	if req.Secret == "" {
+		_, req.Secret = s.hub.Target() // keep the current one
+	}
+	if req.IP == "" || req.Secret == "" {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "both the hub IP and the secret are needed"})
+		return
+	}
+	info, err := validateHub(req.IP, req.Secret)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "could not connect: " + err.Error()})
+		return
+	}
+	if err := s.apply(req.IP, req.Secret); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "info": info})
+}
+
+func (s *Server) apply(ip, secret string) error {
+	if cur, curSecret := s.hub.Target(); cur != ip || curSecret != secret {
+		s.hub.SetTarget(ip, secret)
+	}
+	if err := s.save(ip, secret); err != nil {
+		return err
+	}
+	log.Printf("hub set to %s, saved to %s", ip, s.configPath)
+	return nil
+}
+
+func (s *Server) save(ip, secret string) error {
+	if s.configPath == "" {
+		return nil
+	}
+	s.mu.Lock()
+	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels}
+	err := saveConfig(s.configPath, cfg)
+	s.mu.Unlock()
+	return err
+}

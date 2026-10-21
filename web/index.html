@@ -1,0 +1,1135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Home Heating</title>
+<meta name="theme-color" content="#eb6834">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Heating">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f3ef; --surface: #fcfcfb; --surface-2: #efede8; --surface-3: #e6e3dc;
+  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #8a8883; --line: #e3e0d9;
+  --temp: #2a78d6; --heat: #eb6834; --heat-soft: #fdebe1; --heat-glow: rgba(235,104,52,.28);
+  --cool-soft: #e3eefb;
+  --good: #0ca30c; --good-soft: #e2f4e2; --warn: #b77a00; --warn-soft: #fdf1d6; --crit: #d03b3b; --crit-soft: #fbe5e5;
+  --shadow: 0 1px 2px rgba(20,18,12,.04), 0 4px 16px rgba(20,18,12,.05);
+  --radius: 20px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0e0e0d; --surface: #1a1a19; --surface-2: #232321; --surface-3: #2d2d2a;
+    --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8b8a82; --line: #2c2c29;
+    --temp: #3987e5; --heat: #d95926; --heat-soft: #35200f; --heat-glow: rgba(217,89,38,.35);
+    --cool-soft: #172435;
+    --good-soft: #13281a; --warn: #fab219; --warn-soft: #2f2610; --crit: #e66767; --crit-soft: #351717;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e0e0d; --surface: #1a1a19; --surface-2: #232321; --surface-3: #2d2d2a;
+  --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8b8a82; --line: #2c2c29;
+  --temp: #3987e5; --heat: #d95926; --heat-soft: #35200f; --heat-glow: rgba(217,89,38,.35);
+  --cool-soft: #172435;
+  --good-soft: #13281a; --warn: #fab219; --warn-soft: #2f2610; --crit: #e66767; --crit-soft: #351717;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--temp); outline-offset: 2px; border-radius: 6px; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---- shell ---- */
+header { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); }
+.bar { max-width: 1180px; margin: 0 auto; padding: 14px 20px; display: flex; gap: 18px; align-items: center; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 680; font-size: 17px; letter-spacing: -.01em; }
+.brand img { width: 26px; height: 26px; }
+nav.tabs { display: flex; gap: 2px; background: var(--surface-2); padding: 4px; border-radius: 14px; }
+nav.tabs button { border: 0; background: transparent; padding: 7px 14px; border-radius: 10px; cursor: pointer; color: var(--ink-2);
+  display: flex; align-items: center; gap: 7px; font-weight: 520; }
+nav.tabs button svg { width: 17px; height: 17px; }
+nav.tabs button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+.hstatus { margin-left: auto; display: flex; gap: 10px; align-items: center; color: var(--ink-3); font-size: 13px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); display: inline-block; flex: none; }
+.dot.ok { background: var(--good); } .dot.err { background: var(--crit); } .dot.busy { background: var(--warn); }
+main { max-width: 1180px; margin: 0 auto; padding: 8px 20px 80px; }
+
+/* ---- building blocks ---- */
+.section-h { display: flex; align-items: baseline; justify-content: space-between; margin: 30px 2px 12px; }
+.section-h h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); margin: 0; font-weight: 640; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); min-width: 0; position: relative; }
+.card h3 { margin: 0; font-size: 17px; font-weight: 640; letter-spacing: -.01em; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.between { justify-content: space-between; }
+.muted { color: var(--ink-2); } .faint { color: var(--ink-3); } .small { font-size: 13px; } .xs { font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 560; padding: 3px 10px; border-radius: 999px;
+  background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.chip.heat { background: var(--heat-soft); color: var(--heat); } .chip.good { background: var(--good-soft); color: var(--good); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); } .chip.crit { background: var(--crit-soft); color: var(--crit); }
+.chip.cool { background: var(--cool-soft); color: var(--temp); }
+.chip .flame { width: 12px; height: 12px; }
+.btn { border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; border-radius: 12px; cursor: pointer; white-space: nowrap; font-weight: 540;
+  display: inline-flex; align-items: center; gap: 7px; transition: background .12s, border-color .12s, transform .06s; }
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: scale(.97); }
+.btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.btn.heat { background: var(--heat); color: #fff; border-color: var(--heat); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--surface-2); }
+.btn.sm { padding: 5px 11px; font-size: 13px; border-radius: 10px; }
+.btn:disabled { opacity: .45; cursor: default; transform: none; }
+.btn svg { width: 16px; height: 16px; }
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 12px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; padding: 5px 12px; border-radius: 9px; cursor: pointer; color: var(--ink-2); font-size: 13px; font-weight: 540; }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+input[type=text], input[type=number], input[type=time], input[type=password], select, textarea {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; min-width: 0; }
+textarea { width: 100%; font-family: var(--mono); font-size: 12.5px; }
+.icon-btn { border: 0; background: transparent; cursor: pointer; color: var(--ink-3); padding: 4px 6px; border-radius: 8px; line-height: 1; }
+.icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+.switch { position: relative; width: 40px; height: 24px; flex: none; display: inline-block; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; background: var(--surface-3); border-radius: 24px; cursor: pointer; transition: .16s; }
+.switch span::before { content: ""; position: absolute; width: 20px; height: 20px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: .16s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.switch input:checked + span { background: var(--good); } .switch input:checked + span::before { transform: translateX(16px); }
+.spin { display: inline-block; width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .8s linear infinite; flex: none; }
+@keyframes s { to { transform: rotate(360deg); } }
+.empty { text-align: center; color: var(--ink-3); padding: 70px 20px; }
+.callout { padding: 11px 14px; border-radius: 12px; background: var(--warn-soft); color: var(--warn); font-size: 13.5px; }
+.callout.crit { background: var(--crit-soft); color: var(--crit); }
+.callout.info { background: var(--surface-2); color: var(--ink-2); }
+
+/* ---- hero ---- */
+.hero { padding: 26px 2px 6px; }
+.hero .greet { color: var(--ink-3); font-size: 14px; font-weight: 540; }
+.hero h1 { font-size: clamp(24px, 3.4vw, 34px); line-height: 1.18; margin: 6px 0 16px; font-weight: 650; letter-spacing: -.025em; max-width: 820px; }
+.hero h1 .hot { color: var(--heat); }
+.facts { display: flex; gap: 10px; flex-wrap: wrap; }
+.fact { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 9px 14px; }
+.fact .k { font-size: 12px; color: var(--ink-3); } .fact .v { font-weight: 600; font-size: 14px; }
+.fact .ico { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--surface-2); color: var(--ink-2); }
+.fact .ico.on { background: var(--heat-soft); color: var(--heat); }
+.fact .ico svg { width: 17px; height: 17px; }
+.scenes { display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 6px; margin: 0 -2px; scrollbar-width: none; }
+.scene { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 16px; padding: 12px 16px 12px 12px; cursor: pointer;
+  display: flex; align-items: center; gap: 11px; text-align: left; transition: transform .08s, background .12s; }
+.scene:hover { background: var(--surface-2); }
+.scene:active { transform: scale(.97); }
+.scene .ico { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; background: var(--surface-2); }
+.scene .ico svg { width: 19px; height: 19px; }
+.scene b { display: block; font-size: 14px; font-weight: 600; } .scene span { font-size: 12px; color: var(--ink-3); }
+
+/* ---- room card ---- */
+.room { display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.room.heating { border-color: color-mix(in srgb, var(--heat) 40%, var(--line)); }
+.room.heating::before { content: ""; position: absolute; inset: -40% -20% auto; height: 70%; pointer-events: none;
+  background: radial-gradient(closest-side, var(--heat-glow), transparent); opacity: .55; animation: breathe 4s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: .9; } }
+.room > * { position: relative; }
+.room-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.room-top .sub { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
+.dial-wrap { display: flex; flex-direction: column; align-items: center; margin: 4px 0 2px; }
+.dial { width: 210px; height: 190px; position: relative; }
+.dial > svg { width: 210px; height: 210px; position: absolute; top: 0; left: 0; }
+.dial .center { position: absolute; inset: 0 0 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.dial .now { font-size: 50px; font-weight: 300; letter-spacing: -.04em; line-height: 1; }
+.dial .now sup { font-size: 22px; font-weight: 400; vertical-align: top; position: relative; top: 6px; margin-left: 1px; }
+.dial .lbl { font-size: 13px; color: var(--ink-2); margin-top: 7px; font-weight: 540; }
+.dial .lbl.hot { color: var(--heat); }
+.dial .hum { font-size: 12px; color: var(--ink-3); margin-top: 3px; }
+.stepper { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: -6px; }
+.stepper button { width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 22px; font-weight: 300;
+  display: grid; place-items: center; transition: transform .06s, background .12s; }
+.stepper button:hover { background: var(--surface-2); }
+.stepper button:active { transform: scale(.92); }
+.stepper .tgt { min-width: 92px; text-align: center; }
+.stepper .tgt b { font-size: 22px; font-weight: 600; display: block; letter-spacing: -.02em; }
+.stepper .tgt span { font-size: 11.5px; color: var(--ink-3); display: flex; gap: 5px; align-items: center; justify-content: center; min-height: 16px; }
+.hold { display: flex; justify-content: center; margin-top: 12px; }
+.actions { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+.room-foot { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.room-foot .row { font-size: 12.5px; color: var(--ink-3); }
+
+/* ---- charts ---- */
+.chart { position: relative; touch-action: pan-y; user-select: none; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart .ylab { position: absolute; left: 0; font-size: 11px; color: var(--ink-3); transform: translateY(-50%); }
+.chart .xlab { position: absolute; bottom: -18px; font-size: 11px; color: var(--ink-3); transform: translateX(-50%); white-space: nowrap; }
+.chart .plot { position: absolute; top: 0; bottom: 0; }
+.chart .xhair { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink-3); opacity: 0; pointer-events: none; }
+.chart:hover .xhair { opacity: .6; }
+.chart-empty { display: grid; place-items: center; color: var(--ink-3); font-size: 13px; background: var(--surface-2); border-radius: 12px; text-align: center; padding: 0 16px; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); margin-top: 26px; }
+.legend i { display: inline-block; vertical-align: middle; margin-right: 6px; }
+.tip { position: fixed; z-index: 60; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 9px 12px; box-shadow: 0 8px 28px rgba(0,0,0,.16); font-size: 12.5px; min-width: 150px; opacity: 0; transition: opacity .08s; }
+.tip.show { opacity: 1; }
+.tip .t { color: var(--ink-3); margin-bottom: 5px; }
+.tip .r { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.tip .r b { font-weight: 650; min-width: 46px; } .tip .r i { width: 12px; height: 0; border-top: 2px solid; display: inline-block; }
+.bars { display: flex; align-items: flex-end; gap: 6px; height: 120px; padding-top: 20px; position: relative; }
+.bars .b { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; cursor: default; position: relative; }
+.bars .b .fill { width: 100%; max-width: 34px; background: var(--heat); border-radius: 4px 4px 0 0; min-height: 0; transition: filter .1s; }
+.bars .b:hover .fill { filter: brightness(1.12); }
+.bars .b .val { font-size: 11px; color: var(--ink-2); margin-bottom: 3px; white-space: nowrap; }
+.bars-x { display: flex; gap: 6px; border-top: 1px solid var(--line); padding-top: 5px; }
+.bars-x span { flex: 1; text-align: center; font-size: 11px; color: var(--ink-3); }
+
+/* ---- week schedule ---- */
+.week { display: grid; grid-template-columns: 36px 1fr; gap: 5px 10px; align-items: center; font-size: 12px; }
+.day-bar { position: relative; height: 20px; border-radius: 6px; overflow: hidden; background: var(--surface-2); display: flex; }
+.day-bar i { display: block; height: 100%; }
+.day-bar .nowline { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); border-radius: 1px; }
+.hours { display: flex; justify-content: space-between; color: var(--ink-3); font-size: 10.5px; grid-column: 2; }
+.sched-edit table { border-collapse: collapse; width: 100%; } .sched-edit td { padding: 3px 4px; }
+
+/* ---- kv editor ---- */
+table.kv { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.kv td { padding: 7px 6px; border-top: 1px solid var(--line); vertical-align: middle; word-break: break-word; }
+table.kv td.key { color: var(--ink-2); width: 42%; }
+table.kv td.act { width: 1%; white-space: nowrap; text-align: right; }
+
+/* ---- sheet / modal ---- */
+.scrim { position: fixed; inset: 0; background: rgba(8,8,6,.45); z-index: 40; animation: fade .15s; }
+@keyframes fade { from { opacity: 0; } }
+.sheet { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: var(--bg); z-index: 41; overflow-y: auto;
+  border-left: 1px solid var(--line); animation: slide .2s cubic-bezier(.2,.8,.2,1); padding: 0 22px 40px; }
+@keyframes slide { from { transform: translateX(40px); opacity: 0; } }
+.sheet-h { position: sticky; top: 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(10px);
+  display: flex; justify-content: space-between; align-items: center; padding: 18px 0 12px; z-index: 2; }
+.sheet-h h2 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
+.setting { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 13px 0; border-top: 1px solid var(--line); }
+.setting:first-child { border-top: 0; }
+.setting .l b { display: block; font-weight: 560; font-size: 14px; } .setting .l span { font-size: 12.5px; color: var(--ink-3); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 11px 13px; }
+.stat .k { font-size: 12px; color: var(--ink-3); } .stat .v { font-weight: 620; font-size: 18px; letter-spacing: -.01em; }
+.modal { position: fixed; z-index: 41; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--surface); border-radius: 22px;
+  padding: 24px; width: min(520px, calc(100vw - 32px)); max-height: 90vh; overflow: auto; border: 1px solid var(--line); }
+.modal h3 { margin: 0 0 4px; font-size: 20px; }
+.field { display: flex; flex-direction: column; gap: 7px; margin-top: 18px; }
+.field label { font-weight: 600; font-size: 13.5px; }
+.cand { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
+.cand:hover, .cand.on { border-color: var(--temp); }
+
+/* ---- explorer ---- */
+.explorer { display: grid; grid-template-columns: 200px 1fr; gap: 16px; }
+.side { display: flex; flex-direction: column; gap: 2px; }
+.side button { text-align: left; border: 0; background: transparent; padding: 8px 11px; border-radius: 10px; cursor: pointer; display: flex; justify-content: space-between; }
+.side button.on { background: var(--surface); box-shadow: var(--shadow); font-weight: 600; }
+pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); padding: 12px; border-radius: 12px; max-height: 480px; overflow: auto; }
+details > summary { cursor: pointer; color: var(--ink-2); font-size: 13.5px; list-style: none; user-select: none; font-weight: 540; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "›"; display: inline-block; margin-right: 6px; transition: transform .15s; }
+details[open] > summary::before { transform: rotate(90deg); }
+
+/* ---- toasts ---- */
+.toasts { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 70; align-items: center; width: max-content; max-width: calc(100vw - 32px); }
+.toast { background: var(--ink); color: var(--surface); border-radius: 14px; padding: 10px 16px; font-size: 13.5px; font-weight: 520;
+  box-shadow: 0 8px 30px rgba(0,0,0,.25); animation: pop .18s cubic-bezier(.2,.8,.2,1); display: flex; gap: 9px; align-items: center; }
+.toast.err { background: var(--crit); color: #fff; }
+@keyframes pop { from { transform: translateY(10px); opacity: 0; } }
+
+/* ---- phone ---- */
+@media (max-width: 760px) {
+  .bar { padding: 12px 16px; }
+  nav.tabs { position: fixed; bottom: 0; left: 0; right: 0; z-index: 30; border-radius: 0; justify-content: space-around;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--surface) 92%, transparent);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--line); }
+  nav.tabs button { flex-direction: column; gap: 2px; font-size: 10.5px; padding: 5px 6px; flex: 1; }
+  nav.tabs button svg { width: 22px; height: 22px; }
+  nav.tabs button.on { background: transparent; box-shadow: none; color: var(--heat); }
+  main { padding: 0 16px 110px; }
+  .grid { grid-template-columns: 1fr; }
+  .explorer { grid-template-columns: 1fr; }
+  .side { flex-direction: row; overflow-x: auto; }
+  .hstatus .txt { display: none; }
+  .toasts { bottom: calc(80px + env(safe-area-inset-bottom)); }
+  .sheet { padding: 0 16px 40px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand"><img src="icon.svg" alt="">Heating</div>
+    <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+    <div class="hstatus" id="status"></div>
+  </div>
+</header>
+<main id="view"><div class="empty"><span class="spin"></span></div></main>
+<div id="overlay"></div>
+<div class="tip" id="tip" role="tooltip"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+"use strict";
+// ---------------- constants & state ----------------
+const OFF = -200, MIN_T = 50, MAX_T = 300;
+const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const ICON = {
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>',
+  cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>',
+  chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 15l4-5 3 3 5-6"/></svg>',
+  chip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  flame: '<svg class="flame" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c3 4.5 6.5 7 6.5 12a6.5 6.5 0 0 1-13 0c0-3.3 1.6-5.2 2.6-7.5.8 2.5 2.6 3.4 2.6 3.4 0-3.3 0-5.9 1.3-7.9z"/></svg>',
+  drop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3s6 6.4 6 11a6 6 0 0 1-12 0c0-4.6 6-11 6-11z"/></svg>',
+  boost: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
+  power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v9M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+  away: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21V12h6v9M3 10.5 12 3l9 7.5"/><path d="M17 3h4v4"/></svg>',
+  homein: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="m9 14 2 2 4-4"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
+};
+const TABS = [["home","Home",ICON.home],["schedules","Schedules",ICON.cal],["insights","Insights",ICON.chart],["devices","Devices",ICON.chip],["advanced","Advanced",ICON.gear]];
+const S = {
+  tab: localGet("tab") || "home", state: null, hist: {samples: [], runtime: []}, lastSig: "",
+  pend: {},      // room id -> {target, phase: 'wait'|'send'|'sent', at}
+  timers: {},
+  hold: {},      // room id -> "" | "60" | "180"
+  busy: {},      // action key -> true while running
+  sheet: null, sheetRange: 24, insRange: 24, adv: "system",
+  edit: null, sched: null, exp: "Room",
+  consoleIn: {method: "GET", path: "/data/domain/Room", body: ""}, consoleOut: null,
+  setup: null, setupOpen: false, charts: {},
+};
+
+// ---------------- helpers ----------------
+function localGet(k) { try { return localStorage.getItem("wiser." + k); } catch { return null; } }
+function localSet(k, v) { try { localStorage.setItem("wiser." + k, v); } catch {} }
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const deg = v => v == null ? "–" : v <= OFF ? "Off" : (v / 10).toFixed(1) + "°";
+const sec = n => S.state?.sections?.[n]?.data;
+const hhmm = d => d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+const dur = m => m < 1 ? "0m" : m < 60 ? Math.round(m) + "m" : Math.floor(m / 60) + "h" + (Math.round(m % 60) ? " " + Math.round(m % 60) + "m" : "");
+const ago = t => { if (!t) return "never"; const s = Math.round((Date.now() - new Date(t)) / 1000); return s < 8 ? "just now" : s < 90 ? s + "s ago" : Math.round(s / 60) + "m ago"; };
+const isHeating = r => r.PercentageDemand > 0 || r.ControlOutputState === "On";
+const chName = c => S.state?.channelNames?.[c.id] || c.Name || "Zone " + c.id;
+const zoneOf = id => (sec("HeatingChannel") || []).find(c => (c.RoomIds || []).includes(id));
+const rooms = () => sec("Room") || [];
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  return r.json();
+}
+function toast(msg, err) {
+  const el = document.createElement("div");
+  el.className = "toast" + (err ? " err" : "");
+  el.textContent = msg;
+  $("#toasts").append(el);
+  while ($("#toasts").children.length > 3) $("#toasts").firstChild.remove();
+  setTimeout(() => el.remove(), err ? 7000 : 3000);
+}
+// hub() sends one command through the server's queue (hub takes ~5s per request).
+async function hub(method, path, body, label, quiet) {
+  try {
+    const r = await api("/api/request", {method, path, body});
+    if (r.error || r.status < 200 || r.status >= 300) {
+      toast(`${label || path}: ${r.error || hubError(r.body) || "HTTP " + r.status}`, true);
+      return null;
+    }
+    if (!quiet) toast(label ? label + " ✓" : "Done");
+    poll(true);
+    return r;
+  } catch (e) { toast(e.message, true); return null; }
+}
+function hubError(body) { try { return JSON.parse(body).Error; } catch { return (body || "").slice(0, 160); } }
+const patch = (path, body, label, quiet) => hub("PATCH", path, body, label, quiet);
+// run() marks a button group busy while a multi-step action runs.
+async function run(key, fn) {
+  if (S.busy[key]) return;
+  S.busy[key] = true; render();
+  try { await fn(); } finally { delete S.busy[key]; render(); }
+}
+
+// ---------------- polling ----------------
+async function poll(force) {
+  try { S.state = await api("/api/state"); }
+  catch { $("#status").innerHTML = `<span class="dot err"></span><span class="txt">Dashboard server unreachable</span>`; return; }
+  settlePending();
+  renderStatus();
+  if (!S.state.configured && !S.setupOpen) openSetup();
+  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras]);
+  const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.closest(".modal");
+  if (force || (sig !== S.lastSig && !typing && !S.edit)) { S.lastSig = sig; render(); }
+}
+async function pollHistory() {
+  const hours = Math.max(24, S.tab === "insights" ? S.insRange : 24, S.sheet != null ? S.sheetRange : 24);
+  try { S.hist = await api("/api/history?hours=" + hours + "&days=7"); render(); } catch {}
+}
+// Pending targets clear once the hub reports them (or after 60s).
+function settlePending() {
+  for (const [id, p] of Object.entries(S.pend)) {
+    const r = rooms().find(r => String(r.id) === id);
+    if (p.phase === "sent" && (r?.CurrentSetPoint === p.target || Date.now() - p.at > 60000)) delete S.pend[id];
+  }
+}
+
+function renderStatus() {
+  const st = S.state; let fresh = 0, errs = 0;
+  for (const e of Object.values(st.sections || {})) {
+    if (e.fetched && !e.fetched.startsWith("0001")) fresh = Math.max(fresh, +new Date(e.fetched));
+    if (e.error) errs++;
+  }
+  const dot = !st.configured ? "err" : errs ? "busy" : fresh ? "ok" : "busy";
+  const theme = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  $("#status").innerHTML = `
+    ${st.queue > 0 ? `<span class="chip warn"><span class="spin"></span>${st.queue} sending</span>` : ""}
+    <span class="dot ${dot}" title="${esc(st.hubIP || "")}"></span>
+    <span class="txt">${!st.configured ? "Not connected" : fresh ? "Updated " + ago(fresh) : "Connecting…"}</span>
+    <button class="icon-btn" title="Switch theme" aria-label="Switch theme" onclick="toggleTheme()" style="width:30px;height:30px">${theme === "dark" ? ICON.sun : ICON.moon}</button>`;
+}
+function toggleTheme() {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next; localSet("theme", next); renderStatus(); render();
+}
+
+// ---------------- render ----------------
+function render() {
+  $("#tabs").innerHTML = TABS.map(([k, l, i]) => `<button class="${S.tab === k ? "on" : ""}" onclick="go('${k}')" aria-current="${S.tab === k}">${i}<span>${l}</span></button>`).join("");
+  const v = $("#view");
+  if (!S.state) return;
+  if (!S.state.configured) v.innerHTML = `<div class="empty"><h2 style="color:var(--ink)">Let's connect to your hub</h2><p>The dashboard needs your Wiser hub's address and secret.</p><button class="btn primary" onclick="openSetup()">Set up</button></div>`;
+  else if (!sec("Room")) v.innerHTML = `<div class="empty"><span class="spin"></span><p>Reading your hub…</p><p class="small">It answers one request about every 5 seconds, so the first load takes ~20 seconds.</p></div>`;
+  else v.innerHTML = ({home: viewHome, schedules: viewSchedules, insights: viewInsights, devices: viewDevices, advanced: viewAdvanced})[S.tab]();
+  renderOverlay();
+}
+function go(tab) { S.tab = tab; S.edit = null; localSet("tab", tab); window.scrollTo(0, 0); render(); if (tab === "insights") pollHistory(); }
+
+// ---------------- home ----------------
+function viewHome() {
+  const rs = rooms(), hw = sec("HotWater") || [], chans = sec("HeatingChannel") || [];
+  const heating = rs.filter(isHeating);
+  const boilerOn = chans.some(c => c.HeatingRelayState === "On") || hw.some(w => w.HotWaterRelayState === "On");
+  const today = S.hist.runtime?.[S.hist.runtime.length - 1];
+  const h = new Date().getHours();
+  const greet = h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+
+  let out = `<section class="hero"><div class="greet">${greet}</div><h1>${headline(rs, heating, hw)}</h1>
+    <div class="facts">
+      ${fact(ICON.flame, boilerOn, "Boiler", boilerOn ? "Running" : "Idle")}
+      ${fact(ICON.drop, hw.some(w => w.WaterHeatingState === "On"), "Hot water", hw.length ? (hw[0].WaterHeatingState === "On" ? "On" : "Off") : "–")}
+      ${today ? fact(ICON.chart, false, "Heating today", dur(today.heating)) : ""}
+    </div></section>`;
+
+  out += `<div class="section-h"><h2>Quick actions</h2></div><div class="scenes">
+    ${scene("boostall", ICON.boost, "var(--heat)", "Warm up", "All rooms 21° for 1h", "sceneBoost()")}
+    ${scene("resume", ICON.back, "var(--temp)", "Back to schedule", "Clear all overrides", "sceneResume()")}
+    ${scene("alloff", ICON.power, "var(--ink-2)", "Heating off", "Until next schedule change", "sceneOff()")}
+    ${scene("away", ICON.away, "var(--ink-2)", "Leaving home", "Away mode at 10°", "setAway(true)")}
+    ${scene("home", ICON.homein, "var(--good)", "I'm home", "Turn away mode off", "setAway(false)")}
+  </div>`;
+
+  out += `<div class="section-h"><h2>Rooms</h2></div><div class="grid">${rs.map(roomCard).join("") || `<div class="faint">No rooms on the hub.</div>`}</div>`;
+  if (hw.length) out += `<div class="section-h"><h2>Hot water</h2></div><div class="grid">${hw.map(hotWaterCard).join("")}</div>`;
+  return out;
+}
+function headline(rs, heating, hw) {
+  const names = list => list.map(r => esc(r.Name)).join(" and ");
+  if (heating.length) {
+    const t = heating.map(r => `${esc(r.Name)} to <span class="num">${deg(r.CurrentSetPoint)}</span>`).join(", ");
+    return `<span class="hot">Heating</span> ${t}.`;
+  }
+  const on = rs.filter(r => r.CurrentSetPoint > OFF);
+  const temps = rs.map(r => `${esc(r.Name)} ${deg(r.CalculatedTemperature)}`).join(" · ");
+  if (!on.length) return `Heating is off.<br><span style="color:var(--ink-3);font-weight:500">${temps}</span>`;
+  return `All comfortable.<br><span style="color:var(--ink-3);font-weight:500">${temps}</span>`;
+}
+function fact(icon, on, k, v) { return `<div class="fact"><div class="ico ${on ? "on" : ""}">${icon}</div><div><div class="k">${k}</div><div class="v">${esc(v)}</div></div></div>`; }
+function scene(key, icon, color, title, sub, onclick) {
+  const busy = S.busy[key];
+  return `<button class="scene" onclick="run('${key}',()=>${onclick})" ${busy ? "disabled" : ""}><div class="ico" style="color:${color}">${busy ? '<span class="spin"></span>' : icon}</div><div><b>${title}</b><span>${sub}</span></div></button>`;
+}
+async function sceneBoost() { for (const r of rooms()) await patch(`/data/domain/Room/${r.id}`, {RequestOverride: {Type: "Manual", SetPoint: 210, DurationMinutes: 60, Originator: "App"}}, `${r.Name} 21° for 1h`); }
+async function sceneResume() {
+  for (const r of rooms()) if (r.OverrideType && r.OverrideType !== "None") await patch(`/data/domain/Room/${r.id}`, {RequestOverride: {Type: "None"}}, `${r.Name} back to schedule`);
+  for (const w of sec("HotWater") || []) if (w.OverrideType && w.OverrideType !== "None") await patch(`/data/domain/HotWater/${w.id}`, {RequestOverride: {Type: "None"}}, "Hot water back to schedule");
+  if (!rooms().some(r => r.OverrideType && r.OverrideType !== "None")) toast("Everything is already on its schedule");
+}
+async function sceneOff() { for (const r of rooms()) await patch(`/data/domain/Room/${r.id}`, {RequestOverride: {Type: "Manual", SetPoint: OFF}}, `${r.Name} off`); }
+async function setAway(on) {
+  await patch("/data/domain/System", {RequestOverride: on ? {Type: 2, SetPoint: 100} : {Type: 0, SetPoint: 0}}, on ? "Away mode on" : "Away mode off");
+}
+
+// ---- room card ----
+function roomState(r) {
+  const p = S.pend[r.id];
+  const target = p ? p.target : r.CurrentSetPoint;
+  return {target, pending: p, heating: isHeating(r)};
+}
+function originChip(r) {
+  const until = r.OverrideTimeoutUnixTime ? " until " + hhmm(new Date(r.OverrideTimeoutUnixTime * 1000)) : "";
+  switch (r.SetpointOrigin) {
+    case "FromSchedule": return `<span class="chip">Schedule</span>`;
+    case "FromBoost": return `<span class="chip heat">${ICON.flame}Boost${until}</span>`;
+    case "FromManualOverride": return `<span class="chip cool">Hold${until}</span>`;
+    case "FromManualMode": return `<span class="chip">Manual</span>`;
+    case "FromAwayMode": return `<span class="chip warn">Away</span>`;
+    default: return r.SetpointOrigin ? `<span class="chip">${esc(r.SetpointOrigin.replace(/^From/, ""))}</span>` : "";
+  }
+}
+function roomCard(r) {
+  const {target, pending, heating} = roomState(r);
+  const stat = (sec("RoomStat") || []).find(s => s.id === r.RoomStatId);
+  const zone = zoneOf(r.id);
+  const overridden = r.OverrideType && r.OverrideType !== "None";
+  const hold = S.hold[r.id] ?? "";
+  let lbl = target <= OFF ? "Off" : heating ? `Heating to ${deg(target)}` : `Set to ${deg(target)}`;
+  const pendTxt = !pending ? "" : pending.phase === "wait" ? "Applying…" : `<span class="spin" style="width:10px;height:10px"></span> Sending`;
+  return `<article class="card room ${heating ? "heating" : ""}">
+    <div class="room-top">
+      <div><h3>${esc(r.Name)}</h3><div class="sub">${zone ? esc(chName(zone)) + " zone" : "No heating zone"}</div></div>
+      <div class="row" style="justify-content:flex-end">${originChip(r)}</div>
+    </div>
+    <div class="dial-wrap" onclick="openRoom(${r.id})" style="cursor:pointer" title="Room details">
+      ${dial(r.CalculatedTemperature, target, heating, `
+        <div class="now num">${r.CalculatedTemperature != null ? (r.CalculatedTemperature / 10).toFixed(1) : "–"}<sup>°</sup></div>
+        <div class="lbl ${heating ? "hot" : ""}">${heating ? ICON.flame.replace('class="flame"', 'class="flame" style="width:12px;height:12px;vertical-align:-1px;margin-right:3px"') : ""}${lbl}</div>
+        ${stat?.MeasuredHumidity != null ? `<div class="hum">${stat.MeasuredHumidity}% humidity</div>` : ""}`)}
+    </div>
+    <div class="stepper">
+      <button aria-label="Cooler" onclick="nudge(${r.id},-5)">−</button>
+      <div class="tgt"><b class="num">${deg(target)}</b><span>${pendTxt || "target"}</span></div>
+      <button aria-label="Warmer" onclick="nudge(${r.id},5)">+</button>
+    </div>
+    <div class="hold"><div class="seg" role="group" aria-label="How long">
+      ${[["", "Until next change"], ["60", "1 hour"], ["180", "3 hours"]].map(([v, l]) => `<button class="${hold === v ? "on" : ""}" onclick="S.hold[${r.id}]='${v}';render()">${l}</button>`).join("")}
+    </div></div>
+    <div class="actions">
+      <button class="btn sm" onclick="boostRoom(${r.id})">${ICON.boost}Boost 1h</button>
+      <button class="btn sm" onclick="roomOff(${r.id})">${ICON.power}Off</button>
+      ${overridden ? `<button class="btn sm" onclick="patch('/data/domain/Room/${r.id}',{RequestOverride:{Type:'None'}},'${esc(r.Name)} back to schedule')">${ICON.back}Resume schedule</button>` : ""}
+      <button class="btn sm ghost" onclick="openRoom(${r.id})">Details ›</button>
+    </div>
+    <div class="room-foot">
+      ${tempChart("spark" + r.id, r.id, {hours: 24, height: 46, spark: true})}
+      <div class="row between" style="margin-top:8px"><span>${nextChange(r)}</span><span>${demandText(r)}</span></div>
+    </div>
+  </article>`;
+}
+function demandText(r) { return r.PercentageDemand > 0 ? `Demand ${r.PercentageDemand}%` : "No demand"; }
+function nextChange(r) {
+  const s = (sec("schedules")?.Heating || []).find(s => s.id === r.ScheduleId);
+  if (!s) return "";
+  const allOff = DAYS.every(d => (s[d]?.DegreesC || []).every(v => v <= OFF));
+  if (allOff) return "Schedule: off all week";
+  if (!s.Next || s.Next.DegreesC > 1000) return "";
+  const t = String(s.Next.Time).padStart(4, "0");
+  return `Next: ${s.Next.Day.slice(0, 3)} ${t.slice(0, 2)}:${t.slice(2)} → ${deg(s.Next.DegreesC)}`;
+}
+
+// The dial: 270° arc from 5° to 30°. The heat-coloured stretch is the gap between now and target.
+function dial(cur, target, heating, center) {
+  const A0 = 135, SW = 270, R = 86, C = 105;
+  const ang = v => A0 + SW * Math.max(0, Math.min(1, (v - MIN_T) / (MAX_T - MIN_T)));
+  const pt = (a, r = R) => [C + r * Math.cos(a * Math.PI / 180), C + r * Math.sin(a * Math.PI / 180)];
+  const arc = (a1, a2) => { const [x1, y1] = pt(a1), [x2, y2] = pt(a2); return `M${x1.toFixed(1)} ${y1.toFixed(1)} A${R} ${R} 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${x2.toFixed(1)} ${y2.toFixed(1)}`; };
+  let svg = `<path d="${arc(A0, A0 + SW)}" stroke="var(--surface-3)" stroke-width="10" fill="none" stroke-linecap="round"/>`;
+  // tick marks every 5°
+  for (let v = 100; v <= 250; v += 50) { const [x1, y1] = pt(ang(v), R - 12), [x2, y2] = pt(ang(v), R - 17); svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--ink-3)" stroke-width="1.5" stroke-linecap="round" opacity=".6"/>`; }
+  if (cur != null) {
+    svg += `<path d="${arc(A0, ang(cur))}" stroke="var(--temp)" stroke-opacity=".22" stroke-width="10" fill="none" stroke-linecap="round"/>`;
+    if (target > OFF && target > cur) svg += `<path d="${arc(ang(cur), ang(target))}" stroke="var(--heat)" stroke-opacity="${heating ? 1 : .45}" stroke-width="10" fill="none" stroke-linecap="round"/>`;
+    const [cx, cy] = pt(ang(cur));
+    svg += `<circle cx="${cx}" cy="${cy}" r="8" fill="var(--temp)" stroke="var(--surface)" stroke-width="3"/>`;
+  }
+  if (target > OFF) {
+    const [tx, ty] = pt(ang(target));
+    svg += `<circle cx="${tx}" cy="${ty}" r="7" fill="var(--surface)" stroke="${heating ? "var(--heat)" : "var(--ink-2)"}" stroke-width="3"/>`;
+  }
+  return `<div class="dial"><svg viewBox="0 0 210 210" aria-hidden="true">${svg}</svg><div class="center">${center}</div></div>`;
+}
+
+// Debounced setpoint: tap +/- freely, the hub gets one command 1.2s after the last tap.
+function nudge(id, step) {
+  const r = rooms().find(r => r.id === id);
+  let v = S.pend[id]?.target ?? r.CurrentSetPoint;
+  if (v <= OFF) v = step > 0 ? Math.max(MIN_T, Math.round((r.CalculatedTemperature || 180) / 5) * 5) : OFF;
+  else { v += step; if (v < MIN_T) v = OFF; if (v > MAX_T) v = MAX_T; }
+  S.pend[id] = {target: v, phase: "wait", at: Date.now()};
+  clearTimeout(S.timers[id]);
+  S.timers[id] = setTimeout(() => applyTarget(id), 1200);
+  render();
+}
+async function applyTarget(id) {
+  const p = S.pend[id]; if (!p) return;
+  p.phase = "send"; render();
+  const d = S.hold[id];
+  const ov = {Type: "Manual", SetPoint: p.target};
+  if (d) Object.assign(ov, {DurationMinutes: +d, Originator: "App"});
+  const name = rooms().find(r => r.id === id)?.Name || "Room";
+  const ok = await patch(`/data/domain/Room/${id}`, {RequestOverride: ov}, `${name} → ${deg(p.target)}${d ? " for " + dur(+d) : ""}`);
+  if (S.pend[id] === p) { if (ok) { p.phase = "sent"; p.at = Date.now(); } else delete S.pend[id]; }
+  render();
+}
+function boostRoom(id) {
+  const r = rooms().find(r => r.id === id);
+  const t = Math.max(210, (S.pend[id]?.target > OFF ? S.pend[id].target : r.CurrentSetPoint) || 0, Math.round((r.CalculatedTemperature + 10) / 5) * 5);
+  patch(`/data/domain/Room/${id}`, {RequestOverride: {Type: "Manual", SetPoint: Math.min(t, MAX_T), DurationMinutes: 60, Originator: "App"}}, `${r.Name} boost to ${deg(Math.min(t, MAX_T))} for 1h`);
+}
+function roomOff(id) {
+  const r = rooms().find(r => r.id === id);
+  const d = S.hold[id];
+  const ov = {Type: "Manual", SetPoint: OFF};
+  if (d) Object.assign(ov, {DurationMinutes: +d, Originator: "App"});
+  patch(`/data/domain/Room/${id}`, {RequestOverride: ov}, `${r.Name} off`);
+}
+
+// ---- hot water ----
+function hotWaterCard(w) {
+  const on = w.WaterHeatingState === "On";
+  const overridden = w.OverrideType && w.OverrideType !== "None";
+  const src = (w.HotWaterDescription || "").replace(/^From/, "");
+  const s = (sec("schedules")?.OnOff || []).find(s => s.id === w.ScheduleId);
+  const next = s?.Next ? `Next: ${s.Next.Day.slice(0, 3)} ${String(s.Next.Time).padStart(4, "0").replace(/(\d\d)(\d\d)/, "$1:$2")} → ${esc(s.Next.State)}` : "";
+  return `<article class="card ${on ? "room heating" : ""}">
+    <div class="room-top"><div><h3>Hot water</h3><div class="sub">${esc(w.Mode)} mode · ${esc(src || "–")}</div></div>
+      ${on ? `<span class="chip heat">${ICON.flame}Heating</span>` : `<span class="chip">Off</span>`}</div>
+    <div class="row" style="margin:22px 0 16px;gap:14px">
+      <div class="fact" style="border:0;padding:0"><div class="ico ${on ? "on" : ""}" style="width:52px;height:52px;border-radius:16px">${ICON.drop}</div>
+      <div><div style="font-size:26px;font-weight:620;letter-spacing:-.02em">${on ? "On" : "Off"}</div><div class="faint small">Scheduled: ${esc(w.ScheduledWaterHeatingState || "–")}</div></div></div>
+    </div>
+    <div class="row">
+      <span class="faint small" style="margin-right:2px">Boost</span>
+      ${[30, 60, 120].map(m => `<button class="btn sm" onclick="hwSet(${w.id},true,${m})">${ICON.boost}${dur(m)}</button>`).join("")}
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sm" onclick="hwSet(${w.id},true)">Turn on</button>
+      <button class="btn sm" onclick="hwSet(${w.id},false)">Turn off</button>
+      ${overridden ? `<button class="btn sm" onclick="patch('/data/domain/HotWater/${w.id}',{RequestOverride:{Type:'None'}},'Hot water back to schedule')">${ICON.back}Resume schedule</button>` : ""}
+    </div>
+    <div class="room-foot row between"><span>${next}</span>
+      <div class="seg">${["Auto", "Manual"].map(m => `<button class="${w.Mode === m ? "on" : ""}" onclick="patch('/data/domain/HotWater/${w.id}',{Mode:'${m}'},'Hot water ${m.toLowerCase()} mode')">${m}</button>`).join("")}</div></div>
+  </article>`;
+}
+function hwSet(id, on, minutes) {
+  const ov = {Type: "Manual", SetPoint: on ? 1100 : OFF};
+  if (minutes) Object.assign(ov, {DurationMinutes: minutes, Originator: "App"});
+  patch(`/data/domain/HotWater/${id}`, {RequestOverride: ov}, minutes ? `Hot water boost ${dur(minutes)}` : `Hot water ${on ? "on" : "off"}`);
+}
+
+// ---------------- charts ----------------
+// Temperature (line), target (dashed step) and heating (shaded band) on one °C axis.
+function tempChart(key, roomId, {hours, height, spark}) {
+  const t1 = Date.now() / 1000, t0 = t1 - hours * 3600;
+  const pts = (S.hist.samples || []).filter(s => s.t >= t0 && s.r?.[roomId]).map(s => ({t: s.t, v: s.r[roomId]}));
+  if (pts.length < 2) return `<div class="chart-empty" style="height:${height}px">${spark ? "History starts recording now — one point a minute." : "Collecting data. The dashboard records a reading every minute; this chart fills in as it runs."}</div>`;
+  const vals = pts.flatMap(p => [p.v[0], ...(p.v[1] > OFF ? [p.v[1]] : [])]);
+  let lo = Math.floor(Math.min(...vals) / 10) * 10 - 5, hi = Math.ceil(Math.max(...vals) / 10) * 10 + 5;
+  if (hi - lo < 30) { const m = (hi + lo) / 2; lo = m - 15; hi = m + 15; }
+  const W = 1000, H = height;
+  const X = t => ((t - t0) / (t1 - t0) * W).toFixed(1), Y = v => (H - (v - lo) / (hi - lo) * H).toFixed(1);
+  const GAP = 10 * 60;
+  let line = "", step = "", bands = "", bandStart = null;
+  pts.forEach((p, i) => {
+    const prev = pts[i - 1], broken = !prev || p.t - prev.t > GAP;
+    line += `${broken ? "M" : "L"}${X(p.t)} ${Y(p.v[0])}`;
+    if (p.v[1] > OFF) step += (broken || !(prev.v[1] > OFF)) ? `M${X(p.t)} ${Y(p.v[1])}` : `H${X(p.t)}V${Y(p.v[1])}`;
+    const hot = p.v[2] > 0 && !broken;
+    if (hot && bandStart == null) bandStart = prev ? prev.t : p.t;
+    if ((!hot || i === pts.length - 1) && bandStart != null) { bands += `<rect x="${X(bandStart)}" y="0" width="${Math.max(2, X(p.t) - X(bandStart))}" height="${H}" fill="var(--heat)" opacity=".13"/>`; bandStart = null; }
+  });
+  S.charts[key] = {pts, t0, t1};
+  const vec = 'vector-effect="non-scaling-stroke"';
+  let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${bands}
+    ${spark ? "" : [lo + (hi - lo) / 4, (lo + hi) / 2, hi - (hi - lo) / 4].map(v => `<line x1="0" x2="${W}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)" ${vec}/>`).join("")}
+    <path d="${step}" fill="none" stroke="var(--ink-3)" stroke-width="1.5" stroke-dasharray="4 4" ${vec}/>
+    <path d="${line}" fill="none" stroke="var(--temp)" stroke-width="2" stroke-linejoin="round" ${vec}/></svg>`;
+  let labels = "";
+  if (!spark) {
+    labels += [lo + (hi - lo) / 4, (lo + hi) / 2, hi - (hi - lo) / 4].map(v => `<span class="ylab num" style="top:${(Y(v) / H * 100).toFixed(1)}%">${(v / 10).toFixed(0)}°</span>`).join("");
+    const stepH = hours <= 24 ? 6 : hours <= 72 ? 12 : 24;
+    const first = new Date(t0 * 1000); first.setMinutes(0, 0, 0);
+    for (let d = new Date(first); d.getTime() / 1000 <= t1; d.setHours(d.getHours() + 1)) {
+      if (d.getTime() / 1000 < t0 || d.getHours() % stepH) continue;
+      const txt = stepH === 24 ? d.toLocaleDateString([], {weekday: "short"}) : d.getHours() === 0 && hours > 24 ? d.toLocaleDateString([], {weekday: "short"}) : String(d.getHours()).padStart(2, "0") + ":00";
+      labels += `<span class="xlab" style="left:${((d.getTime() / 1000 - t0) / (t1 - t0) * 100).toFixed(1)}%">${txt}</span>`;
+    }
+  }
+  const pad = spark ? "" : "padding-left:28px;";
+  return `<div style="${pad}position:relative"><div class="chart" data-chart="${key}" style="height:${H}px">${svg}${labels}<div class="xhair"></div></div></div>
+    ${spark ? "" : `<div class="legend"><span><i style="width:16px;border-top:2px solid var(--temp)"></i>Temperature</span><span><i style="width:16px;border-top:2px dashed var(--ink-3)"></i>Target</span><span><i style="width:12px;height:10px;background:var(--heat);opacity:.3;border-radius:2px"></i>Heating on</span></div>`}`;
+}
+// One shared crosshair + tooltip for every temperature chart.
+document.addEventListener("pointermove", e => {
+  const el = e.target.closest?.(".chart[data-chart]"), tip = $("#tip");
+  if (!el) { tip.classList.remove("show"); return; }
+  const c = S.charts[el.dataset.chart]; if (!c) return;
+  const box = el.getBoundingClientRect(), f = Math.max(0, Math.min(1, (e.clientX - box.left) / box.width));
+  const t = c.t0 + f * (c.t1 - c.t0);
+  let best = c.pts[0]; for (const p of c.pts) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+  const x = (best.t - c.t0) / (c.t1 - c.t0) * 100;
+  el.querySelector(".xhair").style.left = x + "%";
+  tip.replaceChildren();
+  const head = document.createElement("div"); head.className = "t";
+  head.textContent = new Date(best.t * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"});
+  tip.append(head);
+  const row = (val, label, style) => { const r = document.createElement("div"); r.className = "r"; const i = document.createElement("i"); i.style.cssText = style; const b = document.createElement("b"); b.textContent = val; const s = document.createElement("span"); s.textContent = label; s.style.color = "var(--ink-3)"; r.append(i, b, s); tip.append(r); };
+  row(deg(best.v[0]), "temperature", "border-color:var(--temp)");
+  row(deg(best.v[1]), "target", "border-top-style:dashed;border-color:var(--ink-3)");
+  row(best.v[2] + "%", best.v[2] > 0 ? "heating" : "demand", "border-color:var(--heat)");
+  if (best.v[3] >= 0) row(best.v[3] + "%", "humidity", "border-color:transparent");
+  const tx = Math.min(e.clientX + 14, innerWidth - 190), ty = Math.max(8, e.clientY - 90);
+  tip.style.left = tx + "px"; tip.style.top = ty + "px"; tip.classList.add("show");
+});
+document.addEventListener("pointerleave", () => $("#tip").classList.remove("show"));
+
+// Daily runtime bars (one chart per zone, single series).
+function runtimeBars(days, pick, title) {
+  const vals = days.map(pick), max = Math.max(60, ...vals);
+  return `<div class="card"><div class="row between" style="margin-bottom:6px"><h3 style="font-size:15px">${esc(title)}</h3><span class="faint small">${dur(vals.reduce((a, b) => a + b, 0))} this week</span></div>
+    <div class="bars">${days.map((d, i) => {
+      const tip = `${new Date(d.day + "T12:00").toLocaleDateString([], {weekday: "long", day: "numeric", month: "short"})}: ${dur(vals[i])}${d.covered < 1380 ? ` (recorded ${dur(d.covered)} of the day)` : ""}`;
+      return `<div class="b" title="${esc(tip)}" tabindex="0" aria-label="${esc(tip)}">${vals[i] > 0 ? `<span class="val num">${dur(vals[i])}</span>` : ""}<div class="fill" style="height:${(vals[i] / max * 100).toFixed(1)}%"></div></div>`;
+    }).join("")}</div>
+    <div class="bars-x">${days.map(d => `<span>${new Date(d.day + "T12:00").toLocaleDateString([], {weekday: "short"})}</span>`).join("")}</div></div>`;
+}
+
+// ---------------- room sheet ----------------
+function openRoom(id) { S.sheet = id; S.edit = null; render(); pollHistory(); }
+function closeOverlay() { S.sheet = null; S.edit = null; S.setupOpen = false; render(); }
+function renderOverlay() {
+  const o = $("#overlay");
+  const prevScroll = o.querySelector(".sheet")?.scrollTop || 0;
+  if (S.setupOpen) { o.innerHTML = setupHTML(); return; }
+  if (S.sheet == null) { o.innerHTML = ""; return; }
+  const r = rooms().find(r => r.id === S.sheet);
+  if (!r) { o.innerHTML = ""; return; }
+  o.innerHTML = `<div class="scrim" onclick="closeOverlay()"></div><aside class="sheet" role="dialog" aria-label="${esc(r.Name)}">${roomSheet(r)}</aside>`;
+  o.querySelector(".sheet").scrollTop = prevScroll;
+}
+function roomSheet(r) {
+  const chans = sec("HeatingChannel") || [], scheds = sec("schedules")?.Heating || [];
+  const zone = zoneOf(r.id), stat = (sec("RoomStat") || []).find(s => s.id === r.RoomStatId);
+  const dev = (sec("Device") || []).find(d => d.id === r.RoomStatId);
+  const today = S.hist.runtime?.[S.hist.runtime.length - 1];
+  const zoneMin = zone && today ? today.channels?.[zone.id] || 0 : null;
+  const rate = warmingRate(r.id);
+  const mode = r.Mode;
+  return `<div class="sheet-h"><h2>${esc(r.Name)}</h2><button class="btn sm" onclick="closeOverlay()">Done</button></div>
+    <div class="stats">
+      <div class="stat"><div class="k">Now</div><div class="v num">${deg(r.CalculatedTemperature)}</div></div>
+      <div class="stat"><div class="k">Target</div><div class="v num">${deg(r.CurrentSetPoint)}</div></div>
+      ${stat?.MeasuredHumidity != null ? `<div class="stat"><div class="k">Humidity</div><div class="v num">${stat.MeasuredHumidity}%</div></div>` : ""}
+      <div class="stat"><div class="k">Zone heated today</div><div class="v num">${zoneMin == null ? "–" : dur(zoneMin)}</div></div>
+      ${rate != null ? `<div class="stat"><div class="k">Trend (30 min)</div><div class="v num">${rate > 0 ? "+" : ""}${rate.toFixed(1)}°/h</div></div>` : ""}
+    </div>
+    <div class="section-h"><h2>History</h2><div class="seg">${[[24, "24h"], [72, "3 days"], [168, "7 days"]].map(([h, l]) => `<button class="${S.sheetRange === h ? "on" : ""}" onclick="S.sheetRange=${h};pollHistory()">${l}</button>`).join("")}</div></div>
+    <div class="card" style="padding-bottom:16px">${tempChart("sheet" + r.id, r.id, {hours: S.sheetRange, height: 190})}</div>
+    <div class="section-h"><h2>Settings</h2></div>
+    <div class="card" style="padding:4px 18px">
+      <div class="setting"><div class="l"><b>Heating zone</b><span>Which boiler output heats this room</span></div>
+        <select onchange="moveZone(${r.id}, +this.value, this)" ${S.busy["zone" + r.id] ? "disabled" : ""}>
+          ${zone ? "" : `<option value="" selected>None</option>`}
+          ${chans.map(c => `<option value="${c.id}" ${zone?.id === c.id ? "selected" : ""}>${esc(chName(c))}</option>`).join("")}
+        </select></div>
+      <div class="setting"><div class="l"><b>Schedule</b><span>Weekly program this room follows</span></div>
+        <select onchange="patch('/data/domain/Room/${r.id}',{ScheduleId:+this.value},'Schedule changed')">
+          ${scheds.map(s => `<option value="${s.id}" ${s.id === r.ScheduleId ? "selected" : ""}>${esc(s.Name || "Schedule " + s.id)}</option>`).join("")}
+        </select></div>
+      <div class="setting"><div class="l"><b>Mode</b><span>${mode === "Auto" ? "Follows the schedule" : "Holds a fixed temperature"}</span></div>
+        <div class="seg">${["Auto", "Manual"].map(m => `<button class="${mode === m ? "on" : ""}" onclick="patch('/data/domain/Room/${r.id}',{Mode:'${m}'},'${esc(r.Name)}: ${m.toLowerCase()} mode')">${m === "Auto" ? "Schedule" : "Manual"}</button>`).join("")}</div></div>
+      <div class="setting"><div class="l"><b>Open window detection</b><span>Pause heating when a sudden drop is detected</span></div>
+        <label class="switch"><input type="checkbox" ${r.WindowDetectionActive ? "checked" : ""} onchange="patch('/data/domain/Room/${r.id}',{WindowDetectionActive:this.checked},'Window detection '+(this.checked?'on':'off'))"><span></span></label></div>
+      <div class="setting"><div class="l"><b>Name</b><span>Shown here and in the Wiser app</span></div>
+        ${S.edit === "rename" ? `<span class="row"><input type="text" id="editbox" value="${esc(r.Name)}" style="width:150px" onkeydown="if(event.key==='Enter')renameRoom(${r.id})"><button class="btn sm primary" onclick="renameRoom(${r.id})">Save</button></span>`
+          : `<button class="btn sm" onclick="startEdit('rename')">Rename</button>`}</div>
+      ${dev ? `<div class="setting"><div class="l"><b>Thermostat</b><span>${esc(dev.DisplayedSignalStrength || "")} signal${dev.BatteryVoltage != null ? " · battery " + (dev.BatteryVoltage / 10).toFixed(1) + " V" : ""}</span></div>
+        <span class="row"><span class="faint small">Lock buttons</span><label class="switch"><input type="checkbox" ${dev.DeviceLockEnabled ? "checked" : ""} onchange="patch('/data/domain/Device/${dev.id}',{DeviceLockEnabled:this.checked},'Thermostat lock '+(this.checked?'on':'off'))"><span></span></label></span></div>` : ""}
+    </div>
+    <details style="margin-top:22px"><summary>Every field from the hub</summary><div class="card" style="margin-top:10px">${kvEditor(r, "/data/domain/Room/" + r.id, "room" + r.id)}</div></details>`;
+}
+function warmingRate(id) {
+  const now = Date.now() / 1000, pts = (S.hist.samples || []).filter(s => s.t > now - 1800 && s.r?.[id]);
+  if (pts.length < 10) return null;
+  const a = pts[0], b = pts[pts.length - 1];
+  return ((b.r[id][0] - a.r[id][0]) / 10) / ((b.t - a.t) / 3600);
+}
+async function moveZone(room, channel, sel) {
+  if (!channel) return;
+  const name = rooms().find(r => r.id === room)?.Name;
+  const c = (sec("HeatingChannel") || []).find(c => c.id === channel);
+  await run("zone" + room, async () => {
+    toast(`Moving ${name} to ${chName(c)}…`);
+    const r = await api("/api/room-zone", {room, channel});
+    if (r.ok) toast(`${name} is now heated by ${chName(c)} ✓`); else toast(r.error, true);
+    await poll(true);
+  });
+}
+async function renameRoom(id) {
+  const v = $("#editbox").value.trim(); S.edit = null;
+  if (v) await patch(`/data/domain/Room/${id}`, {Name: v}, "Renamed to " + v); else render();
+}
+
+// ---------------- schedules ----------------
+const fmtTime = t => String(Math.floor(t / 100)).padStart(2, "0") + ":" + String(t % 100).padStart(2, "0");
+const parseTime = s => { const [h, m] = s.split(":").map(Number); return h * 100 + m; };
+const tMin = t => Math.floor(t / 100) * 60 + t % 100;
+function tempColor(v) {
+  if (v <= OFF) return "var(--surface-2)";
+  const x = Math.max(0, Math.min(1, (v / 10 - 14) / 10)); // 14°..24° → light..deep
+  return `color-mix(in srgb, var(--heat) ${Math.round(25 + x * 75)}%, var(--surface))`;
+}
+function schedDays(type, s) {
+  return DAYS.map(d => {
+    if (type === "OnOff") return (s[d] || []).map(v => ({time: Math.abs(v) === 2400 ? 0 : Math.abs(v), value: v > 0 ? 1 : 0}));
+    const day = s[d] || {Time: [], DegreesC: []};
+    return (day.Time || []).map((t, i) => ({time: t, value: day.DegreesC[i]}));
+  });
+}
+function schedBody(type, days, name) {
+  const out = {};
+  if (name != null) out.Name = name;
+  DAYS.forEach((d, i) => {
+    const pts = [...days[i]].sort((a, b) => a.time - b.time);
+    out[d] = type === "OnOff" ? pts.map(p => (p.value ? 1 : -1) * (p.time === 0 ? 2400 : p.time)) : {Time: pts.map(p => p.time), DegreesC: pts.map(p => p.value)};
+  });
+  return out;
+}
+function weekBars(type, days) {
+  const now = new Date(), todayIdx = (now.getDay() + 6) % 7, nowPct = (now.getHours() * 60 + now.getMinutes()) / 14.4;
+  let h = `<div class="week">`;
+  days.forEach((pts, i) => {
+    const sorted = [...pts].sort((a, b) => a.time - b.time);
+    const prev = [...days[(i + 6) % 7]].sort((a, b) => a.time - b.time);
+    let cur = prev.length ? prev[prev.length - 1].value : (type === "OnOff" ? 0 : OFF), at = 0, segs = "";
+    const color = v => type === "OnOff" ? (v ? "var(--heat)" : "var(--surface-2)") : tempColor(v);
+    const label = v => type === "OnOff" ? (v ? "On" : "Off") : deg(v);
+    const seg = (from, to, v) => to > from ? `<i style="width:${(to - from) / 14.4}%;background:${color(v)}" title="${fmtTime(Math.floor(from / 60) * 100 + from % 60)}–${fmtTime(Math.floor(to / 60) * 100 + to % 60)} ${label(v)}"></i>` : "";
+    for (const p of sorted) { const m = tMin(p.time); segs += seg(at, m, cur); at = m; cur = p.value; }
+    segs += seg(at, 1440, cur);
+    h += `<span class="${i === todayIdx ? "" : "faint"}" style="${i === todayIdx ? "font-weight:650" : ""}">${DAYS[i].slice(0, 3)}</span><div class="day-bar">${segs}${i === todayIdx ? `<span class="nowline" style="left:${nowPct}%"></span>` : ""}</div>`;
+  });
+  return h + `<div class="hours"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div></div>`;
+}
+const TEMPLATES = {
+  Heating: [
+    ["Workday", [{time: 630, value: 210}, {time: 830, value: 160}, {time: 1700, value: 210}, {time: 2230, value: 160}]],
+    ["Home all day", [{time: 700, value: 210}, {time: 2230, value: 160}]],
+    ["Night setback", [{time: 600, value: 200}, {time: 2300, value: 170}]],
+    ["Off", [{time: 0, value: OFF}]],
+  ],
+  OnOff: [
+    ["Morning & evening", [{time: 600, value: 1}, {time: 800, value: 0}, {time: 1800, value: 1}, {time: 2000, value: 0}]],
+    ["Morning only", [{time: 600, value: 1}, {time: 800, value: 0}]],
+    ["Off", [{time: 0, value: 0}]],
+  ],
+};
+function viewSchedules() {
+  const all = sec("schedules") || {}, rs = rooms(), hw = sec("HotWater") || [];
+  let h = `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Schedules</h1><p class="muted" style="margin:0">Weekly programs. Tap Edit, or start from a template.</p></section>`;
+  for (const [type, list] of Object.entries(all)) {
+    if (!Array.isArray(list)) continue;
+    h += `<div class="section-h"><h2>${type === "OnOff" ? "Hot water" : "Heating"}</h2></div><div class="grid">`;
+    for (const s of list) {
+      const users = [...rs.filter(r => r.ScheduleId === s.id).map(r => r.Name), ...hw.filter(w => w.ScheduleId === s.id).map(() => "Hot water")];
+      const editing = S.sched && S.sched.type === type && S.sched.id === s.id;
+      h += `<article class="card" style="${editing ? "grid-column:1/-1" : ""}">
+        <div class="room-top"><div><h3>${esc(s.Name || "Schedule " + s.id)}</h3><div class="sub">${users.length ? "Used by " + esc(users.join(", ")) : "Not used"}</div></div>
+          ${s.CurrentSetpoint != null ? `<span class="chip">Now ${deg(s.CurrentSetpoint)}</span>` : s.CurrentState ? `<span class="chip">Now ${esc(s.CurrentState)}</span>` : ""}</div>
+        <div style="margin-top:16px">${editing ? schedEditor() : weekBars(type, schedDays(type, s)) + `<div class="row" style="margin-top:14px"><button class="btn sm" onclick="editSched('${type}',${s.id})">Edit</button></div>`}</div>
+      </article>`;
+    }
+    h += `</div>`;
+  }
+  return h;
+}
+function editSched(type, id) {
+  const s = sec("schedules")[type].find(x => x.id === id);
+  S.sched = {type, id, name: s.Name ?? null, days: schedDays(type, s).map(d => d.map(p => ({...p})))};
+  render();
+}
+function schedEditor() {
+  const {type, days, name} = S.sched;
+  const valInput = (di, pi, p) => type === "OnOff"
+    ? `<select onchange="S.sched.days[${di}][${pi}].value=+this.value"><option value="1" ${p.value ? "selected" : ""}>On</option><option value="0" ${!p.value ? "selected" : ""}>Off</option></select>`
+    : `<select onchange="S.sched.days[${di}][${pi}].value=+this.value">${tempOptions(p.value)}</select>`;
+  let h = `<div class="sched-edit">`;
+  if (name != null) h += `<div class="row" style="margin-bottom:12px"><span class="faint small">Name</span><input type="text" value="${esc(name)}" oninput="S.sched.name=this.value"></div>`;
+  h += `<div class="row" style="margin-bottom:12px"><span class="faint small">Start from</span>${(TEMPLATES[type] || []).map(([n], i) => `<button class="btn sm" onclick="applyTemplate(${i})">${n}</button>`).join("")}<span class="faint xs">(fills all 7 days)</span></div>`;
+  h += `<div style="margin-bottom:14px">${weekBars(type, days)}</div>`;
+  h += `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px">`;
+  days.forEach((pts, di) => {
+    h += `<div class="card" style="padding:12px;border-radius:14px"><div class="row between"><b>${DAYS[di]}</b>
+      <span><button class="icon-btn xs" onclick="copyDay(${di},'all')">Copy to all</button><button class="icon-btn xs" onclick="copyDay(${di},'wk')">Weekdays</button></span></div><table>`;
+    pts.forEach((p, pi) => {
+      h += `<tr><td><input type="time" value="${fmtTime(p.time)}" onchange="S.sched.days[${di}][${pi}].time=parseTime(this.value);render()"></td><td>${valInput(di, pi, p)}</td>
+        <td><button class="icon-btn" aria-label="Remove" onclick="S.sched.days[${di}].splice(${pi},1);render()">✕</button></td></tr>`;
+    });
+    h += `</table><button class="btn sm ghost" style="margin-top:6px" onclick="S.sched.days[${di}].push({time:700,value:${type === "OnOff" ? 1 : 200}});render()">+ Add change</button></div>`;
+  });
+  return h + `</div><div class="row" style="margin-top:16px"><button class="btn primary" onclick="saveSched()" ${S.busy.sched ? "disabled" : ""}>${S.busy.sched ? '<span class="spin"></span>' : ""}Save to hub</button><button class="btn" onclick="S.sched=null;render()">Cancel</button></div></div>`;
+}
+function tempOptions(sel) {
+  let o = `<option value="${OFF}" ${sel <= OFF ? "selected" : ""}>Off</option>`;
+  for (let v = MIN_T; v <= MAX_T; v += 5) o += `<option value="${v}" ${v === sel ? "selected" : ""}>${(v / 10).toFixed(1)}°</option>`;
+  return o;
+}
+function applyTemplate(i) { const pts = TEMPLATES[S.sched.type][i][1]; S.sched.days = DAYS.map(() => pts.map(p => ({...p}))); render(); }
+function copyDay(di, which) { const src = S.sched.days[di]; S.sched.days = S.sched.days.map((d, i) => (which === "all" || i < 5) ? src.map(p => ({...p})) : d); render(); }
+function saveSched() {
+  run("sched", async () => {
+    const {type, id, days, name} = S.sched;
+    const r = await hub("PATCH", `/data/schedules/${type}/${id}`, schedBody(type, days, name), "Schedule saved");
+    if (r) S.sched = null;
+  });
+}
+
+// ---------------- insights ----------------
+function viewInsights() {
+  const rs = rooms(), chans = sec("HeatingChannel") || [], rt = S.hist.runtime || [];
+  let h = `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Insights</h1>
+    <p class="muted" style="margin:0">Recorded by this dashboard every minute (the hub keeps no history). Kept for 14 days.</p></section>
+    <div class="row" style="margin-top:18px"><div class="seg">${[[24, "24 hours"], [72, "3 days"], [168, "7 days"]].map(([v, l]) => `<button class="${S.insRange === v ? "on" : ""}" onclick="S.insRange=${v};pollHistory()">${l}</button>`).join("")}</div></div>`;
+  h += `<div class="section-h"><h2>Temperature</h2></div><div class="grid">${rs.map(r => `<div class="card"><div class="row between" style="margin-bottom:12px"><h3 style="font-size:15px">${esc(r.Name)}</h3><span class="faint small num">${deg(r.CalculatedTemperature)} now</span></div>${tempChart("ins" + r.id, r.id, {hours: S.insRange, height: 170})}</div>`).join("")}</div>`;
+  if (rt.length) {
+    h += `<div class="section-h"><h2>Heating time per day</h2></div><div class="grid">`;
+    h += chans.filter(c => (c.RoomIds || []).length).map(c => runtimeBars(rt, d => d.channels?.[c.id] || 0, chName(c) + " zone")).join("");
+    if ((sec("HotWater") || []).length) h += runtimeBars(rt, d => d.hotWater || 0, "Hot water");
+    h += `</div>`;
+  }
+  return h;
+}
+
+// ---------------- devices ----------------
+function viewDevices() {
+  const devs = sec("Device") || [], rs = rooms();
+  return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Devices</h1></section><div class="section-h"><h2>On the network</h2></div>
+  <div class="grid">${devs.map(d => {
+    const room = rs.find(r => r.RoomStatId === d.id);
+    const sig = d.DisplayedSignalStrength || "–";
+    const pending = d.PendingZigbeeMessageMask > 0;
+    const sigChip = /VeryGood|Good/.test(sig) ? "good" : /Medium/.test(sig) ? "warn" : "crit";
+    return `<article class="card">
+      <div class="room-top"><div><h3>${d.id === 0 ? "Hub" : esc(room ? room.Name + " thermostat" : d.ProductType)}</h3><div class="sub">${esc(d.ModelIdentifier || d.ProductType)} · firmware ${esc(d.ActiveFirmwareVersion || "–")}</div></div>
+        <span class="chip ${sigChip}">${esc(sig.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span></div>
+      <div class="stats" style="margin:16px 0">
+        ${d.BatteryVoltage != null ? `<div class="stat"><div class="k">Battery</div><div class="v num">${(d.BatteryVoltage / 10).toFixed(1)} V</div><div class="faint xs">${esc(d.BatteryLevel || "")}</div></div>` : ""}
+        ${d.ReceptionOfController ? `<div class="stat"><div class="k">Signal</div><div class="v num">${d.ReceptionOfController.Rssi} dBm</div>${d.ReceptionOfController.Lqi != null ? `<div class="faint xs">LQI ${d.ReceptionOfController.Lqi}</div>` : ""}</div>` : ""}
+      </div>
+      ${pending ? `<div class="callout" style="margin-bottom:12px">A change is waiting to reach this device. Battery devices collect it when they next wake.</div>` : ""}
+      <div class="row between">
+        <span class="row"><span class="small">Lock buttons</span><label class="switch"><input type="checkbox" ${d.DeviceLockEnabled ? "checked" : ""} onchange="patch('/data/domain/Device/${d.id}',{DeviceLockEnabled:this.checked},'Lock '+(this.checked?'on':'off'))"><span></span></label></span>
+        ${d.id !== 0 ? `<button class="btn sm" onclick="patch('/data/domain/Device/${d.id}',{Identify:true},'Identify sent')">Identify</button>` : ""}
+      </div>
+      <details style="margin-top:14px"><summary>All fields</summary>${kvEditor(d, "/data/domain/Device/" + d.id, "dev" + d.id)}</details>
+    </article>`;
+  }).join("")}</div>`;
+}
+
+// ---------------- advanced ----------------
+function viewAdvanced() {
+  const sub = {system: advSystem, network: advNetwork, explorer: advExplorer};
+  return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Advanced</h1><p class="muted" style="margin:0">Everything the hub exposes. Changes go straight to the hub.</p></section>
+    <div class="row" style="margin:18px 0 0"><div class="seg">${[["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
+    <button class="btn sm" style="margin-left:auto" onclick="openSetup()">Hub connection</button></div>
+    ${sub[S.adv]()}`;
+}
+function advSystem() {
+  const sys = sec("System") || {};
+  let h = `<div class="section-h"><h2>System</h2></div><div class="card">${kvEditor(sys, "/data/domain/System", "sys")}</div>`;
+  const chans = sec("HeatingChannel") || [];
+  h += `<div class="section-h"><h2>Heating zones</h2></div><div class="grid">${chans.map(c => `<div class="card">
+    <div class="room-top"><div>${S.edit === "ch:" + c.id ? `<input type="text" id="editbox" value="${esc(chName(c))}" onkeydown="if(event.key==='Enter')saveChName(${c.id})"> <button class="btn sm primary" onclick="saveChName(${c.id})">Save</button>`
+      : `<h3>${esc(chName(c))} <button class="icon-btn" title="Rename (dashboard only)" onclick="startEdit('ch:${c.id}')">✎</button></h3>`}
+      <div class="sub">Hub output ${esc(c.Name)} · ${(c.RoomIds || []).map(id => esc(rooms().find(r => r.id === id)?.Name || id)).join(", ") || "no rooms"}</div></div>
+      <span class="chip ${c.HeatingRelayState === "On" ? "heat" : ""}">${c.HeatingRelayState === "On" ? ICON.flame + "On" : "Off"}</span></div>
+    <details style="margin-top:12px"><summary>All fields</summary>${kvEditor(c, "/data/domain/HeatingChannel/" + c.id, "hc" + c.id)}</details></div>`).join("")}</div>`;
+  for (const name of ["Zigbee", "Cloud", ...(S.state.extras || [])]) {
+    const d = sec(name); if (d == null) continue;
+    h += `<div class="section-h"><h2>${esc(name)}</h2></div>`;
+    h += Array.isArray(d) ? `<div class="grid">${d.map(o => `<div class="card">${kvEditor(o, endpointFor(name, o), name + o.id)}</div>`).join("") || `<div class="faint">empty</div>`}</div>` : `<div class="card">${kvEditor(d, endpointFor(name, d), name)}</div>`;
+  }
+  return h;
+}
+async function saveChName(id) {
+  const name = $("#editbox").value; S.edit = null;
+  try { await api("/api/channel-name", {id: String(id), name}); toast("Zone renamed"); } catch (e) { toast(e.message, true); }
+  await poll(true);
+}
+function advNetwork() {
+  const n = sec("network") || {}, st = n.Station || {}, dh = st.DhcpStatus || {}, tcp = n.TcpStats_SinceBoot || {}, hc = n.HealthCheckStats || {};
+  const retr = tcp.SegmentsSent_Count ? (100 * tcp.SegmentRetransmissions_Count / tcp.SegmentsSent_Count) : null;
+  let h = `<div class="section-h"><h2>Wi-Fi</h2></div><div class="grid">
+    <div class="card"><div class="room-top"><h3>${esc(st.SSID || "–")}</h3><span class="chip ${st.ConnectionStatus === "Connected" ? "good" : "crit"}">${esc(st.ConnectionStatus || "–")}</span></div>
+      <div class="stats" style="margin-top:14px">
+        <div class="stat"><div class="k">IP</div><div class="v num" style="font-size:15px">${esc(dh.IPv4Address || "–")}</div></div>
+        <div class="stat"><div class="k">Signal</div><div class="v num">${st.RSSI ? st.RSSI.Current + " dBm" : "–"}</div></div>
+        <div class="stat"><div class="k">Channel</div><div class="v num">${esc(st.Channel ?? "–")}</div></div>
+      </div><div class="faint small" style="margin-top:10px">Hostname ${esc(st.MdnsHostname || "–")}</div></div>
+    <div class="card"><div class="room-top"><h3>Connection health</h3>${retr != null ? `<span class="chip ${retr > 20 ? "crit" : retr > 5 ? "warn" : "good"}">${retr > 20 ? "⚠ " : ""}${retr.toFixed(0)}% resent</span>` : ""}</div>
+      <div class="stats" style="margin-top:14px">
+        <div class="stat"><div class="k">Packets sent</div><div class="v num">${tcp.SegmentsSent_Count ?? "–"}</div></div>
+        <div class="stat"><div class="k">Resent</div><div class="v num">${tcp.SegmentRetransmissions_Count ?? "–"}</div></div>
+        <div class="stat"><div class="k">Wi-Fi up</div><div class="v num">${hc.WifiLastUptime != null ? dur(hc.WifiLastUptime / 60) : "–"}</div></div>
+      </div>
+      ${retr > 20 ? `<div class="callout crit" style="margin-top:12px">Most of the hub's network traffic is being resent, which is why big responses stall. Improve its Wi-Fi link: a mesh point nearby, or a 2.4 GHz-only network.</div>` : ""}</div></div>`;
+  if (st.DetectedAccessPoints?.length) h += `<div class="section-h"><h2>Networks the hub can see</h2></div><div class="card"><table class="kv">${st.DetectedAccessPoints.map(a => `<tr><td class="key">${esc(a.SSID)}</td><td>ch ${a.Channel}</td><td class="num">${a.RSSI} dBm</td></tr>`).join("")}</table></div>`;
+  return h + `<div class="section-h"><h2>All network fields</h2></div><div class="card">${kvEditor(n, "/data/network/", "net")}</div>`;
+}
+function advExplorer() {
+  const names = Object.keys(S.state.sections).sort();
+  if (!names.includes(S.exp)) S.exp = names[0];
+  const e = S.state.sections[S.exp] || {}, d = e.data;
+  let body;
+  if (S.exp === "schedules") body = `<pre>${esc(JSON.stringify(d, null, 2))}</pre>`;
+  else if (Array.isArray(d)) body = d.length ? d.map(o => `<details open class="card" style="margin-bottom:10px"><summary><b>${esc(S.exp === "HeatingChannel" ? chName(o) : o.Name || S.exp + " " + (o.id ?? ""))}</b> <span class="mono faint">${esc(endpointFor(S.exp, o))}</span></summary>${kvEditor(o, endpointFor(S.exp, o), "x" + S.exp + o.id)}</details>`).join("") : `<div class="faint">empty</div>`;
+  else body = d ? `<div class="card">${kvEditor(d, endpointFor(S.exp, d), "x" + S.exp)}</div>` : "";
+  const c = S.consoleIn, o = S.consoleOut;
+  const paths = [...names.map(n => n === "network" ? "/data/network/" : n === "schedules" ? "/data/schedules/" : "/data/domain/" + n)];
+  return `<div class="explorer" style="margin-top:20px">
+    <div class="side">${names.map(n => `<button class="${n === S.exp ? "on" : ""}" onclick="S.exp='${n}';S.edit=null;render()"><span>${esc(n)}</span>${S.state.sections[n].error ? `<span title="${esc(S.state.sections[n].error)}">⚠︎</span>` : ""}</button>`).join("")}</div>
+    <div style="min-width:0">
+      <div class="row between" style="margin-bottom:12px"><div><b>${esc(S.exp)}</b> <span class="faint small">· fetched ${ago(e.fetched)}${e.error ? " · " + esc(e.error) : ""}</span></div>
+        <button class="btn sm" onclick="api('/api/refresh',{section:S.exp}).then(()=>toast('Refresh queued'))">Refresh</button></div>
+      ${body}
+      <div class="section-h"><h2>Console</h2></div>
+      <div class="card">
+        <div class="row">
+          <select onchange="S.consoleIn.method=this.value">${["GET", "PATCH", "POST", "PUT", "DELETE"].map(m => `<option ${m === c.method ? "selected" : ""}>${m}</option>`).join("")}</select>
+          <input type="text" list="cpaths" value="${esc(c.path)}" oninput="S.consoleIn.path=this.value" style="flex:1;min-width:200px" aria-label="Path">
+          <datalist id="cpaths">${paths.map(p => `<option value="${esc(p)}">`).join("")}</datalist>
+          <button class="btn primary" onclick="sendConsole()">Send</button>
+        </div>
+        <textarea rows="5" placeholder='Body (JSON), e.g. {"RequestOverride":{"Type":"Manual","SetPoint":200}}' oninput="S.consoleIn.body=this.value" style="margin-top:8px">${esc(c.body)}</textarea>
+        ${o ? `<div class="row" style="margin:10px 0 6px"><span class="chip ${o.status >= 200 && o.status < 300 && !o.error ? "good" : "crit"}">${o.status || "no response"}</span><span class="faint small">${o.ms} ms${o.error ? " · " + esc(o.error) : ""}</span></div><pre>${esc(pretty(o.body))}</pre>` : ""}
+        <div class="faint xs" style="margin-top:8px">Requests go straight to the hub with its secret attached. Avoid GET /data/domain/ — this hub stalls on the full dump.</div>
+      </div>
+    </div></div>`;
+}
+function pretty(s) { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } }
+async function sendConsole() {
+  const {method, path, body} = S.consoleIn, req = {method, path};
+  if (body.trim()) req.rawBody = body;
+  toast(`${method} ${path}…`);
+  try { S.consoleOut = await api("/api/request", req); } catch (e) { S.consoleOut = {status: 0, error: e.message, body: "", ms: 0}; }
+  render(); poll();
+}
+
+// ---------------- generic field editor ----------------
+const editKey = (scope, path) => scope + ":" + path.join(".");
+function kvEditor(obj, endpoint, scope) { return `<table class="kv">${kvRows(obj, endpoint, scope, [], 0)}</table>`; }
+function kvRows(obj, endpoint, scope, path, depth) {
+  let h = "";
+  for (const [k, v] of Object.entries(obj)) {
+    const p = [...path, k], key = editKey(scope, p), pad = depth ? ` style="padding-left:${8 + depth * 16}px"` : "";
+    if (v && typeof v === "object" && !Array.isArray(v)) { h += `<tr><td class="key"${pad} colspan="3"><b>${esc(k)}</b></td></tr>` + kvRows(v, endpoint, scope, p, depth + 1); continue; }
+    const enc = encodeURIComponent(JSON.stringify({endpoint, path: p}));
+    let val, act = "";
+    if (S.edit === key) {
+      const raw = typeof v === "string" ? v : JSON.stringify(v);
+      val = `<input type="text" id="editbox" value="${esc(raw)}" style="width:100%" onkeydown="if(event.key==='Enter')saveField('${enc}');if(event.key==='Escape')cancelEdit()">`;
+      act = `<button class="btn sm primary" onclick="saveField('${enc}')">Save</button> <button class="btn sm" onclick="cancelEdit()">✕</button>`;
+    } else if (typeof v === "boolean") {
+      val = `<label class="switch"><input type="checkbox" ${v ? "checked" : ""} onchange="toggleField('${enc}',this.checked)"><span></span></label>`;
+    } else {
+      val = `<span class="mono">${esc(Array.isArray(v) ? JSON.stringify(v) : v)}</span>`;
+      act = `<button class="icon-btn" title="Edit" aria-label="Edit ${esc(k)}" onclick="startEdit('${key}')">✎</button>`;
+    }
+    h += `<tr><td class="key"${pad}>${esc(k)}</td><td>${val}</td><td class="act">${act}</td></tr>`;
+  }
+  return h;
+}
+const nestBody = (path, value) => path.reduceRight((acc, k) => ({[k]: acc}), value);
+function startEdit(key) { S.edit = key; render(); const b = $("#editbox"); if (b) { b.focus(); b.select(); } }
+function cancelEdit() { S.edit = null; render(); }
+function currentValue(endpoint, path) {
+  for (const [name, e] of Object.entries(S.state.sections)) for (const o of (Array.isArray(e.data) ? e.data : [e.data])) if (endpointFor(name, o) === endpoint) return path.reduce((a, k) => a?.[k], o);
+}
+async function saveField(enc) {
+  const {endpoint, path} = JSON.parse(decodeURIComponent(enc));
+  const raw = $("#editbox").value, old = currentValue(endpoint, path);
+  let val = raw;
+  if (typeof old === "number") { val = Number(raw); if (Number.isNaN(val)) return toast("Not a number", true); }
+  else if (typeof old !== "string") { try { val = JSON.parse(raw); } catch { return toast("Invalid JSON value", true); } }
+  S.edit = null;
+  await patch(endpoint, nestBody(path, val), `${path.join(".")} saved`);
+}
+function toggleField(enc, val) { const {endpoint, path} = JSON.parse(decodeURIComponent(enc)); patch(endpoint, nestBody(path, val), `${path.join(".")} ${val ? "on" : "off"}`); }
+function endpointFor(section, obj) {
+  if (section === "network") return "/data/network/";
+  if (section === "schedules") return null;
+  return obj && obj.id != null && Array.isArray(sec(section)) ? `/data/domain/${section}/${obj.id}` : `/data/domain/${section}`;
+}
+
+// ---------------- setup ----------------
+async function openSetup() {
+  S.setupOpen = true;
+  try { S.setup = await api("/api/setup"); } catch { S.setup = {}; }
+  S.setup.ip = S.setup.hubIP || ""; S.setup.msg = null;
+  render();
+  if (!S.setup.hubIP && !S.setup.candidates?.length) discoverHub();
+}
+function setupHTML() {
+  const s = S.setup || {};
+  return `<div class="scrim" ${S.state?.configured ? 'onclick="closeOverlay()"' : ""}></div><div class="modal" role="dialog" aria-label="Hub connection">
+    <h3>Hub connection</h3>
+    <div class="faint small">Saved to ${esc(s.configPath || "memory only")}. The secret stays on the server.</div>
+    <div class="field"><label for="sip">Hub address</label>
+      <div class="row"><input type="text" id="sip" value="${esc(s.ip)}" placeholder="192.168.x.x" style="flex:1" oninput="S.setup.ip=this.value">
+        <button class="btn" onclick="discoverHub()" ${s.discovering ? "disabled" : ""}>${s.discovering ? `<span class="spin"></span>Searching…` : "Find hub"}</button></div>
+      ${(s.candidates || []).map(c => `<div class="cand ${c.ip === s.ip ? "on" : ""}" onclick="S.setup.ip='${c.ip}';render()"><span class="mono">${esc(c.ip)}</span><span class="chip ${c.verified ? "good" : ""}">${c.verified ? esc(c.info || "verified") : "Looks like a Wiser hub"}</span></div>`).join("")}
+      ${s.scanned && !(s.candidates || []).length ? `<div class="faint small">No hub found nearby. Enter its address (your router's client list shows it as WiserHeat…).</div>` : ""}
+    </div>
+    <div class="field"><label for="ssec">Secret ${s.hasSecret ? `<span class="chip good">saved</span>` : ""}</label>
+      <input type="password" id="ssec" placeholder="${s.hasSecret ? "Leave empty to keep the saved secret" : "Paste the hub secret"}" autocomplete="off">
+      <div class="row"><button class="btn sm" onclick="fetchHubSecret()">Get it from the hub</button><span class="faint xs">Works while the hub is in setup mode and this computer is on its WiserHeat Wi-Fi.</span></div>
+    </div>
+    ${s.msg ? `<div class="callout ${s.msgErr ? "crit" : "info"}" style="margin-top:16px">${esc(s.msg)}</div>` : ""}
+    <div class="row" style="margin-top:22px;justify-content:flex-end">
+      ${S.state?.configured ? `<button class="btn" onclick="closeOverlay()">Cancel</button>` : ""}
+      <button class="btn primary" onclick="saveSetup()">Connect</button></div>
+  </div>`;
+}
+async function discoverHub() {
+  S.setup.discovering = true; render();
+  try { const r = await api("/api/setup/discover", {}); S.setup.candidates = r.candidates || []; } catch (e) { S.setup.msg = e.message; S.setup.msgErr = true; }
+  S.setup.discovering = false; S.setup.scanned = true;
+  if (!S.setup.ip && S.setup.candidates?.length) S.setup.ip = S.setup.candidates[0].ip;
+  render();
+}
+async function fetchHubSecret() {
+  S.setup.msg = "Asking the hub for its secret…"; S.setup.msgErr = false; render();
+  const r = await api("/api/setup/fetch-secret", {ip: S.setup.ip.trim()});
+  if (r.ok) { toast("Got the secret from " + r.from); closeOverlay(); poll(true); }
+  else { S.setup.msg = r.error; S.setup.msgErr = true; render(); }
+}
+async function saveSetup() {
+  const secret = $("#ssec").value;
+  S.setup.msg = "Connecting… the hub can take ~5 seconds to answer."; S.setup.msgErr = false; render();
+  const r = await api("/api/setup/save", {ip: S.setup.ip.trim(), secret});
+  if (r.ok) { toast("Connected to " + r.info); closeOverlay(); poll(true); }
+  else { S.setup.msg = r.error; S.setup.msgErr = true; render(); }
+}
+
+// ---------------- boot ----------------
+document.addEventListener("keydown", e => { if (e.key === "Escape" && (S.sheet != null || (S.setupOpen && S.state?.configured))) closeOverlay(); });
+(() => { const t = localGet("theme"); if (t) document.documentElement.dataset.theme = t; })();
+render();
+poll(true);
+pollHistory();
+setInterval(poll, 3000);
+setInterval(pollHistory, 60000);
+</script>
+</body>
+</html>
