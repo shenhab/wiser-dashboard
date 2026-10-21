@@ -996,7 +996,7 @@ function advExplorer() {
   else if (Array.isArray(d)) body = d.length ? d.map(o => `<details open class="card" style="margin-bottom:10px"><summary><b>${esc(S.exp === "HeatingChannel" ? chName(o) : o.Name || S.exp + " " + (o.id ?? ""))}</b> <span class="mono faint">${esc(endpointFor(S.exp, o))}</span></summary>${kvEditor(o, endpointFor(S.exp, o), "x" + S.exp + o.id)}</details>`).join("") : `<div class="faint">empty</div>`;
   else body = d ? `<div class="card">${kvEditor(d, endpointFor(S.exp, d), "x" + S.exp)}</div>` : "";
   const c = S.consoleIn, o = S.consoleOut;
-  const paths = [...names.map(n => n === "network" ? "/data/network/" : n === "schedules" ? "/data/schedules/" : "/data/domain/" + n)];
+  const paths = [...names.map(n => ["network", "schedules", "opentherm", "status"].includes(n) ? `/data/${n}/` : "/data/domain/" + n)];
   return `<div class="explorer" style="margin-top:20px">
     <div class="side">${names.map(n => `<button class="${n === S.exp ? "on" : ""}" onclick="S.exp='${n}';S.edit=null;render()"><span>${esc(n)}</span>${S.state.sections[n].error ? `<span title="${esc(S.state.sections[n].error)}">⚠︎</span>` : ""}</button>`).join("")}</div>
     <div style="min-width:0">
@@ -1067,7 +1067,7 @@ async function saveField(enc) {
 }
 function toggleField(enc, val) { const {endpoint, path} = JSON.parse(decodeURIComponent(enc)); patch(endpoint, nestBody(path, val), `${path.join(".")} ${val ? "on" : "off"}`); }
 function endpointFor(section, obj) {
-  if (section === "network") return "/data/network/";
+  if (section === "network" || section === "opentherm" || section === "status") return `/data/${section}/`;
   if (section === "schedules") return null;
   return obj && obj.id != null && Array.isArray(sec(section)) ? `/data/domain/${section}/${obj.id}` : `/data/domain/${section}`;
 }

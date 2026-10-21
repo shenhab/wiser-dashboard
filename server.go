@@ -46,10 +46,18 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/setup/discover", s.handleDiscover)
 	mux.HandleFunc("POST /api/setup/fetch-secret", s.handleFetchSecret)
 	mux.HandleFunc("POST /api/setup/save", s.handleSave)
-	if s.password == "" {
-		return mux
+	var ui http.Handler = mux
+	if s.password != "" {
+		ui = s.basicAuth(mux)
 	}
-	return s.basicAuth(mux)
+	// The hub-compatible API checks the hub's secret instead of the dashboard password.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/data/") {
+			s.serveHubAPI(w, r)
+			return
+		}
+		ui.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) basicAuth(next http.Handler) http.Handler {
@@ -119,21 +127,33 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	res := s.hub.Do(ctx, req.Method, req.Path, body, true)
+	res := s.forward(ctx, req.Method, req.Path, body)
 
 	out := map[string]any{"status": res.Status, "body": string(res.Body), "ms": res.Dur.Milliseconds()}
 	if res.Err != nil {
 		out["error"] = res.Err.Error()
 	}
-	if req.Method != "GET" {
-		log.Printf("%s %s -> %d %v", req.Method, req.Path, res.Status, res.Err)
-		if res.Err == nil && res.Status >= 200 && res.Status < 300 {
-			if sec := s.store.MergeWrite(req.Path, res.Body); sec != "" {
-				s.poller.Refresh(sec)
-			}
+	writeJSON(w, 200, out)
+}
+
+// forward sends a request to the hub ahead of polling and, for writes, updates
+// the cache so the dashboard and Home Assistant see the change straight away.
+func (s *Server) forward(ctx context.Context, method, path string, body []byte) result {
+	res := s.hub.Do(ctx, method, path, body, true)
+	if method == "GET" {
+		return res
+	}
+	log.Printf("%s %s -> %d %v", method, path, res.Status, res.Err)
+	if res.Err == nil && res.Status >= 200 && res.Status < 300 {
+		sec := sectionFor(path)
+		if method == "PATCH" {
+			sec = s.store.MergeWrite(path, res.Body)
+		}
+		if sec != "" {
+			s.poller.Refresh(sec)
 		}
 	}
-	writeJSON(w, 200, out)
+	return res
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {

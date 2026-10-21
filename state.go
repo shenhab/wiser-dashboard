@@ -64,15 +64,10 @@ func (s *Store) setError(name, msg string) {
 func (s *Store) MergeWrite(path string, reply []byte) (refresh string) {
 	section, id, ok := parseDomainPath(path)
 	if !ok {
-		switch {
-		case strings.HasPrefix(path, "/data/schedules"):
-			return "schedules"
-		case strings.HasPrefix(path, "/data/network"):
-			return "network"
-		case strings.HasPrefix(path, "/data/domain/"):
-			return strings.SplitN(strings.TrimPrefix(path, "/data/domain/"), "/", 2)[0]
+		if strings.HasPrefix(path, "/data/schedules/") && s.mergeSchedule(path, reply) {
+			return ""
 		}
-		return ""
+		return sectionFor(path)
 	}
 	if !json.Valid(reply) {
 		return section
@@ -95,10 +90,7 @@ func (s *Store) MergeWrite(path string, reply []byte) (refresh string) {
 		return section
 	}
 	for i, it := range items {
-		var head struct {
-			ID *int64 `json:"id"`
-		}
-		if json.Unmarshal(it, &head) == nil && head.ID != nil && *head.ID == id {
+		if itemID(it) == id {
 			items[i] = append(json.RawMessage(nil), reply...)
 			if b, err := json.Marshal(items); err == nil {
 				e.Data = b
@@ -107,6 +99,70 @@ func (s *Store) MergeWrite(path string, reply []byte) (refresh string) {
 		}
 	}
 	return section
+}
+
+// mergeSchedule folds the reply to a PATCH on /data/schedules/<Type>/<id> into
+// the cached schedule list.
+func (s *Store) mergeSchedule(path string, reply []byte) bool {
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, "/data/schedules/"), "/"), "/")
+	if len(parts) != 2 || !json.Valid(reply) {
+		return false
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || itemID(reply) != id {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.entries["schedules"]
+	if e == nil {
+		return false
+	}
+	var all map[string]json.RawMessage
+	var items []json.RawMessage
+	if json.Unmarshal(e.Data, &all) != nil || json.Unmarshal(all[parts[0]], &items) != nil {
+		return false
+	}
+	for i, it := range items {
+		if itemID(it) == id {
+			items[i] = append(json.RawMessage(nil), reply...)
+			b, err := json.Marshal(items)
+			if err != nil {
+				return false
+			}
+			all[parts[0]] = b
+			if b, err = json.Marshal(all); err != nil {
+				return false
+			}
+			e.Data = b
+			return true
+		}
+	}
+	return false
+}
+
+// itemID returns an item's "id", or -1 if it has none.
+func itemID(raw json.RawMessage) int64 {
+	var head struct {
+		ID *int64 `json:"id"`
+	}
+	if json.Unmarshal(raw, &head) != nil || head.ID == nil {
+		return -1
+	}
+	return *head.ID
+}
+
+// sectionFor names the cached section a hub path belongs to.
+func sectionFor(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/data/schedules"):
+		return "schedules"
+	case strings.HasPrefix(path, "/data/network"):
+		return "network"
+	case strings.HasPrefix(path, "/data/domain/"):
+		return strings.SplitN(strings.TrimPrefix(path, "/data/domain/"), "/", 2)[0]
+	}
+	return ""
 }
 
 // parseDomainPath accepts /data/domain/Room and /data/domain/Room/2.
@@ -133,6 +189,10 @@ func sectionPath(name string) string {
 		return "/data/network/"
 	case "schedules":
 		return "/data/schedules/"
+	case "opentherm":
+		return "/data/opentherm/"
+	case "status":
+		return "/data/status/"
 	}
 	// Never "/data/domain/" itself: this hub stalls on responses over ~2.7 KB.
 	return "/data/domain/" + name
@@ -141,7 +201,7 @@ func sectionPath(name string) string {
 var (
 	fastSections   = []string{"Room", "HeatingChannel", "HotWater", "RoomStat"}
 	mediumSections = []string{"Device", "System"}
-	slowSections   = []string{"schedules", "Schedule", "network", "Zigbee", "Cloud", "SmartValve", "SmartPlug"}
+	slowSections   = []string{"schedules", "Schedule", "network", "Zigbee", "Cloud", "SmartValve", "SmartPlug", "opentherm", "status"}
 	// Sections other Wiser hubs may have; probed once, kept if the hub answers.
 	extraCandidates = []string{"UpgradeInfo", "DeviceCapabilityMatrix", "Shutter", "Light", "Moment",
 		"LightSchedule", "ShutterSchedule", "SmartSensor", "PowerTagE", "Equipment", "Bridge"}
