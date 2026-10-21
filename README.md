@@ -22,7 +22,12 @@ Open `http://<this-machine>:8080`. Settings are saved to the path printed as `-c
 | `-config PATH` | where to save hub IP and secret |
 
 History (one sample a minute, kept 14 days) is recorded to `history.jsonl` next to the config file;
-the hub itself keeps none. Zone labels set in the dashboard are stored in the config too.
+the hub itself keeps none. From it the dashboard works out boiler starts and run lengths, and how fast
+each room warms up (for the "ready ≈" times). `health.jsonl` logs the hub's own restarts, Wi-Fi drops and
+outages. Zone labels and alert settings set in the dashboard are stored in the config too.
+
+`GET /api/alerts` returns the current alerts (`count` of warnings and critical ones, a `summary` line and
+the full list); the Alerts page has a ready-made Home Assistant REST sensor and notification automation.
 
 **Anyone who can open the dashboard can control the heating.** Use `-password` if your network isn't trusted.
 

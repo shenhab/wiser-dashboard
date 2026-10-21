@@ -15,6 +15,7 @@ type Config struct {
 	// ChannelNames are dashboard-only labels for heating channels, keyed by
 	// channel id ("1" -> "Ground Floor"). The hub's own names are untouched.
 	ChannelNames map[string]string `json:"channel_names,omitempty"`
+	Alerts       AlertSettings     `json:"alerts"`
 }
 
 func defaultConfigPath() string {

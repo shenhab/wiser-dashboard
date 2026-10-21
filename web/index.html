@@ -299,12 +299,12 @@ const ICON = {
 };
 const TABS = [["home","Home",ICON.home],["schedules","Schedules",ICON.cal],["insights","Insights",ICON.chart],["devices","Devices",ICON.chip],["advanced","Advanced",ICON.gear]];
 const S = {
-  tab: localGet("tab") || "home", state: null, hist: {samples: [], runtime: []}, lastSig: "",
+  tab: localGet("tab") || "home", state: null, hist: {samples: [], runtime: [], cycles: [], heatRates: {}}, health: {samples: [], events: []}, lastSig: "",
   pend: {},      // room id -> {target, phase: 'wait'|'send'|'sent', at}
   timers: {},
   hold: {},      // room id -> "" | "60" | "180"
   busy: {},      // action key -> true while running
-  sheet: null, sheetRange: 24, insRange: 24, adv: "system",
+  sheet: null, sheetRange: 24, insRange: 24, adv: "settings",
   edit: null, sched: null, exp: "Room",
   consoleIn: {method: "GET", path: "/data/domain/Room", body: ""}, consoleOut: null,
   setup: null, setupOpen: false, charts: {},
@@ -368,13 +368,16 @@ async function poll(force) {
   settlePending();
   renderStatus();
   if (!S.state.configured && !S.setupOpen) openSetup();
-  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras]);
+  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras, S.state.alerts, S.state.settings]);
   const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.closest(".modal");
   if (force || (sig !== S.lastSig && !typing && !S.edit)) { S.lastSig = sig; render(); }
 }
 async function pollHistory() {
   const hours = Math.max(24, S.tab === "insights" ? S.insRange : 24, S.sheet != null ? S.sheetRange : 24);
   try { S.hist = await api("/api/history?hours=" + hours + "&days=7"); render(); } catch {}
+}
+async function pollHealth() {
+  try { S.health = await api("/api/health?days=7"); if (S.tab === "insights" || S.tab === "advanced" || S.tab === "devices") render(); } catch {}
 }
 // Pending targets clear once the hub reports them (or after 60s).
 function settlePending() {
@@ -414,7 +417,7 @@ function render() {
   else v.innerHTML = ({home: viewHome, schedules: viewSchedules, insights: viewInsights, devices: viewDevices, advanced: viewAdvanced})[S.tab]();
   renderOverlay();
 }
-function go(tab) { S.tab = tab; S.edit = null; localSet("tab", tab); window.scrollTo(0, 0); render(); if (tab === "insights") pollHistory(); }
+function go(tab, adv) { S.tab = tab; S.edit = null; if (adv) S.adv = adv; localSet("tab", tab); window.scrollTo(0, 0); render(); if (tab === "insights") pollHistory(); if (tab !== "home") pollHealth(); }
 
 // ---------------- home ----------------
 function viewHome() {
@@ -422,21 +425,26 @@ function viewHome() {
   const heating = rs.filter(isHeating);
   const boilerOn = chans.some(c => c.HeatingRelayState === "On") || hw.some(w => w.HotWaterRelayState === "On");
   const today = S.hist.runtime?.[S.hist.runtime.length - 1];
+  const cyc = S.hist.cycles?.[S.hist.cycles.length - 1];
+  const sys = sec("System") || {};
   const h = new Date().getHours();
   const greet = h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  const at = awayTemp();
+  const awaySub = (at > OFF ? "Rooms held at " + deg(at) : "Heating off") + (sys.AwayModeAffectsHotWater ? ", hot water off" : "");
 
   let out = `<section class="hero"><div class="greet">${greet}</div><h1>${headline(rs, heating, hw)}</h1>
     <div class="facts">
       ${fact(ICON.flame, boilerOn, "Boiler", boilerOn ? "Running" : "Idle")}
       ${fact(ICON.drop, hw.some(w => w.WaterHeatingState === "On"), "Hot water", hw.length ? (hw[0].WaterHeatingState === "On" ? "On" : "Off") : "–")}
       ${today ? fact(ICON.chart, false, "Heating today", dur(today.heating)) : ""}
-    </div></section>`;
+      ${cyc && cyc.boiler.starts ? fact(ICON.boost, false, "Boiler starts today", String(cyc.boiler.starts)) : ""}
+    </div>${alertBanner()}</section>`;
 
   out += `<div class="section-h"><h2>Quick actions</h2></div><div class="scenes">
     ${scene("boostall", ICON.boost, "var(--heat)", "Warm up", "All rooms 21° for 1h", "sceneBoost()")}
     ${scene("resume", ICON.back, "var(--temp)", "Back to schedule", "Clear all overrides", "sceneResume()")}
     ${scene("alloff", ICON.power, "var(--ink-2)", "Heating off", "Until next schedule change", "sceneOff()")}
-    ${scene("away", ICON.away, "var(--ink-2)", "Leaving home", "Away mode at 10°", "setAway(true)")}
+    ${scene("away", ICON.away, "var(--ink-2)", "Leaving home", awaySub, "setAway(true)")}
     ${scene("home", ICON.homein, "var(--good)", "I'm home", "Turn away mode off", "setAway(false)")}
   </div>`;
 
@@ -468,7 +476,24 @@ async function sceneResume() {
 }
 async function sceneOff() { for (const r of rooms()) await patch(`/data/domain/Room/${r.id}`, {RequestOverride: {Type: "Manual", SetPoint: OFF}}, `${r.Name} off`); }
 async function setAway(on) {
-  await patch("/data/domain/System", {RequestOverride: on ? {Type: 2, SetPoint: 100} : {Type: 0, SetPoint: 0}}, on ? "Away mode on" : "Away mode off");
+  await patch("/data/domain/System", {RequestOverride: on ? {Type: 2, SetPoint: awayTemp()} : {Type: 0, SetPoint: 0}}, on ? "Away mode on" : "Away mode off");
+}
+// The away temperature is the hub's own setting (Advanced → Hub settings); Off means no heating while away.
+function awayTemp() { const v = sec("System")?.AwayModeSetPointLimit; return v == null ? 100 : v; }
+function alertBanner() {
+  const al = (S.state.alerts || []).filter(a => a.level !== "info");
+  if (!al.length) return "";
+  const crit = al.some(a => a.level === "critical");
+  return `<div class="callout ${crit ? "crit" : ""}" style="margin-top:16px;display:flex;gap:12px;align-items:center;justify-content:space-between">
+    <div>${al.slice(0, 3).map(a => `<div><b>${esc(a.title)}</b>${a.detail ? `<span style="opacity:.85"> · ${esc(a.detail)}</span>` : ""}</div>`).join("")}${al.length > 3 ? `<div>and ${al.length - 3} more</div>` : ""}</div>
+    <button class="btn sm" onclick="go('advanced','alerts')">All alerts</button></div>`;
+}
+// Minutes until a room reaches target, from its learned warm-up speed.
+function etaMinutes(r, target) {
+  const hr = S.hist.heatRates?.[r.id];
+  if (!hr || hr.perHour < 0.1 || target <= OFF || r.CalculatedTemperature == null) return null;
+  const diff = (target - r.CalculatedTemperature) / 10;
+  return diff > 0.1 ? Math.round(diff / hr.perHour * 60) : null;
 }
 
 // ---- room card ----
@@ -496,6 +521,9 @@ function roomCard(r) {
   const hold = S.hold[r.id] ?? "";
   let lbl = target <= OFF ? "Off" : heating ? `Heating to ${deg(target)}` : `Set to ${deg(target)}`;
   const pendTxt = !pending ? "" : pending.phase === "wait" ? "Applying…" : `<span class="spin" style="width:10px;height:10px"></span> Sending`;
+  const eta = heating ? etaMinutes(r, target) : null;
+  const tgtTxt = pendTxt || (eta != null ? `ready ≈ ${hhmm(new Date(Date.now() + eta * 60000))}` : "target");
+  const sched = r.ScheduledSetPoint != null && r.ScheduledSetPoint !== target ? `<div class="row between" style="margin-top:4px"><span>Schedule says ${deg(r.ScheduledSetPoint)}</span><span>${esc(r.EffectiveMode && r.EffectiveMode !== r.Mode ? r.EffectiveMode + " mode" : "")}</span></div>` : "";
   return `<article class="card room ${heating ? "heating" : ""}">
     <div class="room-top">
       <div><h3>${esc(r.Name)}</h3><div class="sub">${zone ? esc(chName(zone)) + " zone" : "No heating zone"}</div></div>
@@ -509,7 +537,7 @@ function roomCard(r) {
     </div>
     <div class="stepper">
       <button aria-label="Cooler" onclick="nudge(${r.id},-5)">−</button>
-      <div class="tgt"><b class="num">${deg(target)}</b><span>${pendTxt || "target"}</span></div>
+      <div class="tgt"><b class="num">${deg(target)}</b><span title="${eta != null ? "Based on how fast this room warmed before" : ""}">${tgtTxt}</span></div>
       <button aria-label="Warmer" onclick="nudge(${r.id},5)">+</button>
     </div>
     <div class="hold"><div class="seg" role="group" aria-label="How long">
@@ -524,6 +552,7 @@ function roomCard(r) {
     <div class="room-foot">
       ${tempChart("spark" + r.id, r.id, {hours: 24, height: 46, spark: true})}
       <div class="row between" style="margin-top:8px"><span>${nextChange(r)}</span><span>${demandText(r)}</span></div>
+      ${sched}
     </div>
   </article>`;
 }
@@ -725,15 +754,23 @@ function roomSheet(r) {
   const today = S.hist.runtime?.[S.hist.runtime.length - 1];
   const zoneMin = zone && today ? today.channels?.[zone.id] || 0 : null;
   const rate = warmingRate(r.id);
+  const learned = S.hist.heatRates?.[r.id];
+  const eta = etaMinutes(r, r.CurrentSetPoint);
+  const etaLine = eta != null && isHeating(r) ? `<div class="callout info" style="margin-top:12px">Reaches ${deg(r.CurrentSetPoint)} in about ${dur(eta)} (around ${hhmm(new Date(Date.now() + eta * 60000))}), going by how fast it warmed before.</div>` : "";
+  const windowOpen = r.WindowState === "Open" || /Window/.test(r.SetpointOrigin || "");
   const mode = r.Mode;
   return `<div class="sheet-h"><h2>${esc(r.Name)}</h2><button class="btn sm" onclick="closeOverlay()">Done</button></div>
     <div class="stats">
       <div class="stat"><div class="k">Now</div><div class="v num">${deg(r.CalculatedTemperature)}</div></div>
       <div class="stat"><div class="k">Target</div><div class="v num">${deg(r.CurrentSetPoint)}</div></div>
       ${stat?.MeasuredHumidity != null ? `<div class="stat"><div class="k">Humidity</div><div class="v num">${stat.MeasuredHumidity}%</div></div>` : ""}
+      ${r.ScheduledSetPoint != null && r.ScheduledSetPoint !== r.CurrentSetPoint ? `<div class="stat"><div class="k">Schedule says</div><div class="v num">${deg(r.ScheduledSetPoint)}</div></div>` : ""}
+      ${stat?.MeasuredTemperature != null && stat.MeasuredTemperature !== r.CalculatedTemperature ? `<div class="stat"><div class="k">Thermostat reads</div><div class="v num">${deg(stat.MeasuredTemperature)}</div><div class="faint xs">hub uses ${deg(r.CalculatedTemperature)}</div></div>` : ""}
       <div class="stat"><div class="k">Zone heated today</div><div class="v num">${zoneMin == null ? "–" : dur(zoneMin)}</div></div>
       ${rate != null ? `<div class="stat"><div class="k">Trend (30 min)</div><div class="v num">${rate > 0 ? "+" : ""}${rate.toFixed(1)}°/h</div></div>` : ""}
+      <div class="stat"><div class="k">Warms up at</div>${learned ? `<div class="v num">${learned.perHour.toFixed(1)}°/h</div><div class="faint xs">from ${learned.runs} heat-up${learned.runs > 1 ? "s" : ""}</div>` : `<div class="v" style="font-size:14px">Learning</div><div class="faint xs">after a 20+ min heat-up</div>`}</div>
     </div>
+    ${etaLine}
     <div class="section-h"><h2>History</h2><div class="seg">${[[24, "24h"], [72, "3 days"], [168, "7 days"]].map(([h, l]) => `<button class="${S.sheetRange === h ? "on" : ""}" onclick="S.sheetRange=${h};pollHistory()">${l}</button>`).join("")}</div></div>
     <div class="card" style="padding-bottom:16px">${tempChart("sheet" + r.id, r.id, {hours: S.sheetRange, height: 190})}</div>
     <div class="section-h"><h2>Settings</h2></div>
@@ -749,7 +786,7 @@ function roomSheet(r) {
         </select></div>
       <div class="setting"><div class="l"><b>Mode</b><span>${mode === "Auto" ? "Follows the schedule" : "Holds a fixed temperature"}</span></div>
         <div class="seg">${["Auto", "Manual"].map(m => `<button class="${mode === m ? "on" : ""}" onclick="patch('/data/domain/Room/${r.id}',{Mode:'${m}'},'${esc(r.Name)}: ${m.toLowerCase()} mode')">${m === "Auto" ? "Schedule" : "Manual"}</button>`).join("")}</div></div>
-      <div class="setting"><div class="l"><b>Open window detection</b><span>Pause heating when a sudden drop is detected</span></div>
+      <div class="setting"><div class="l"><b>Open window detection</b><span>${windowOpen ? `<span class="chip warn">Window open: heating paused</span>` : "Pause heating when a sudden drop is detected"}</span></div>
         <label class="switch"><input type="checkbox" ${r.WindowDetectionActive ? "checked" : ""} onchange="patch('/data/domain/Room/${r.id}',{WindowDetectionActive:this.checked},'Window detection '+(this.checked?'on':'off'))"><span></span></label></div>
       <div class="setting"><div class="l"><b>Name</b><span>Shown here and in the Wiser app</span></div>
         ${S.edit === "rename" ? `<span class="row"><input type="text" id="editbox" value="${esc(r.Name)}" style="width:150px" onkeydown="if(event.key==='Enter')renameRoom(${r.id})"><button class="btn sm primary" onclick="renameRoom(${r.id})">Save</button></span>`
@@ -757,8 +794,20 @@ function roomSheet(r) {
       ${dev ? `<div class="setting"><div class="l"><b>Thermostat</b><span>${esc(dev.DisplayedSignalStrength || "")} signal${dev.BatteryVoltage != null ? " · battery " + (dev.BatteryVoltage / 10).toFixed(1) + " V" : ""}</span></div>
         <span class="row"><span class="faint small">Lock buttons</span><label class="switch"><input type="checkbox" ${dev.DeviceLockEnabled ? "checked" : ""} onchange="patch('/data/domain/Device/${dev.id}',{DeviceLockEnabled:this.checked},'Thermostat lock '+(this.checked?'on':'off'))"><span></span></label></span></div>` : ""}
     </div>
+    <div class="section-h"><h2>How the hub runs this room</h2></div>
+    <div class="card" style="padding:4px 18px"><table class="kv">
+      ${infoRow("Effective mode", r.EffectiveMode, "What the room is doing right now, after away mode and overrides")}
+      ${infoRow("Heat control", r.DemandType === "Modulating" ? "Modulating (heats in proportion to the gap)" : r.DemandType)}
+      ${infoRow("Heat source", spaced(r.HeatingType || ""))}
+      ${infoRow("Direction", r.ControlDirection)}
+      ${infoRow("Shown on thermostat", deg(r.DisplayedSetPoint))}
+      ${infoRow("Hub's heating-rate value", r.HeatingRate, "Internal value the hub uses for comfort mode pre-heating")}
+      ${r.AwayModeSuppressed ? infoRow("Away mode", "Ignored for this room") : ""}
+    </table></div>
     <details style="margin-top:22px"><summary>Every field from the hub</summary><div class="card" style="margin-top:10px">${kvEditor(r, "/data/domain/Room/" + r.id, "room" + r.id)}</div></details>`;
 }
+function infoRow(k, v, hint) { return v == null || v === "" ? "" : `<tr><td class="key">${esc(k)}${hint ? `<div class="faint xs">${esc(hint)}</div>` : ""}</td><td>${esc(v)}</td></tr>`; }
+const spaced = s => String(s).replace(/([a-z])([A-Z])/g, "$1 $2");
 function warmingRate(id) {
   const now = Date.now() / 1000, pts = (S.hist.samples || []).filter(s => s.t > now - 1800 && s.r?.[id]);
   if (pts.length < 10) return null;
@@ -908,7 +957,85 @@ function viewInsights() {
     if ((sec("HotWater") || []).length) h += runtimeBars(rt, d => d.hotWater || 0, "Hot water");
     h += `</div>`;
   }
+  h += insCycles() + insWarmup() + insHealth();
   return h;
+}
+
+// Boiler starts per day; many short runs ("short cycling") waste gas and wear the boiler.
+function insCycles() {
+  const cy = S.hist.cycles || [];
+  if (!cy.length) return "";
+  const tot = cy.reduce((a, d) => ({starts: a.starts + d.boiler.starts, short: a.short + d.boiler.short, runs: a.runs + d.boiler.runs, minutes: a.minutes + d.boiler.minutes}), {starts: 0, short: 0, runs: 0, minutes: 0});
+  const today = cy[cy.length - 1].boiler, avg = tot.runs ? tot.minutes / tot.runs : null;
+  const rate = (sec("System")?.BoilerSettings?.CycleRate || "").replace("CPH_", "");
+  let verdict = `<div class="callout info" style="margin-top:14px">Not enough runs recorded yet to judge. This fills in as the boiler runs.</div>`;
+  const pulse = `The hub holds temperature by pulsing the boiler on and off${rate ? `, up to ${rate} times an hour` : ""}, so runs under 10 minutes are normal.`;
+  if (tot.runs >= 5) verdict = tot.short / tot.runs > .3
+    ? `<div class="callout" style="margin-top:14px">${pulse} But ${Math.round(100 * tot.short / tot.runs)}% of runs were under 5 minutes, which is too short for the boiler to warm up properly: it wastes gas and wears it. Many installers set 3 starts an hour for modern gas boilers; worth asking yours.</div>`
+    : `<div class="callout info" style="margin-top:14px">${pulse} Only ${Math.round(100 * tot.short / tot.runs)}% of runs were under 5 minutes, which is fine.</div>`;
+  const chans = (sec("HeatingChannel") || []).filter(c => (c.RoomIds || []).length);
+  let h = `<div class="section-h"><h2>Boiler starts</h2></div><div class="grid">
+    <div class="card"><h3 style="font-size:15px">This week</h3>
+      <div class="stats" style="margin-top:12px">
+        <div class="stat"><div class="k">Starts today</div><div class="v num">${today.starts}</div></div>
+        <div class="stat"><div class="k">Starts this week</div><div class="v num">${tot.starts}</div></div>
+        <div class="stat"><div class="k">Average run</div><div class="v num">${avg != null ? dur(avg) : "–"}</div></div>
+        <div class="stat"><div class="k">Very short runs</div><div class="v num">${tot.short}</div><div class="faint xs">under 5 min</div></div>
+      </div>${verdict}</div>
+    <div class="card"><div class="row between" style="margin-bottom:6px"><h3 style="font-size:15px">Starts per day</h3><span class="faint small">heating + hot water</span></div>
+      ${dayBars(cy, cy.map(d => d.boiler.starts), String, (d) => `${new Date(d.day + "T12:00").toLocaleDateString([], {weekday: "long"})}: ${d.boiler.starts} starts, ${d.boiler.short} short, longest ${dur(d.boiler.longest)}`)}</div>
+  </div>`;
+  h += `<div class="card" style="margin-top:16px;overflow-x:auto"><table class="kv"><tr><td class="key"><b>Day</b></td>${chans.map(c => `<td><b>${esc(chName(c))}</b></td>`).join("")}<td><b>Hot water</b></td><td><b>Boiler</b></td></tr>
+    ${[...cy].reverse().map(d => {
+      const cell = c => c && (c.starts || c.minutes) ? `${c.starts} start${c.starts === 1 ? "" : "s"} · ${dur(c.minutes)}${c.short ? ` <span class="chip warn">${c.short} short</span>` : ""}` : `<span class="faint">–</span>`;
+      return `<tr><td class="key">${new Date(d.day + "T12:00").toLocaleDateString([], {weekday: "short", day: "numeric", month: "short"})}</td>${chans.map(c => `<td class="num">${cell(d.channels?.[c.id])}</td>`).join("")}<td class="num">${cell(d.hotWater)}</td><td class="num">${cell(d.boiler)}</td></tr>`;
+    }).join("")}</table></div>`;
+  return h;
+}
+function dayBars(days, vals, fmt, tipFn) {
+  const max = Math.max(1, ...vals);
+  return `<div class="bars">${days.map((d, i) => { const tip = tipFn(d, i); return `<div class="b" title="${esc(tip)}" tabindex="0" aria-label="${esc(tip)}">${vals[i] > 0 ? `<span class="val num">${fmt(vals[i])}</span>` : ""}<div class="fill" style="height:${(vals[i] / max * 100).toFixed(1)}%"></div></div>`; }).join("")}</div>
+    <div class="bars-x">${days.map(d => `<span>${new Date(d.day + "T12:00").toLocaleDateString([], {weekday: "short"})}</span>`).join("")}</div>`;
+}
+function insWarmup() {
+  const rs = rooms();
+  return `<div class="section-h"><h2>Warm-up speed</h2></div><div class="grid">${rs.map(r => {
+    const hr = S.hist.heatRates?.[r.id];
+    return `<div class="card"><div class="row between"><h3 style="font-size:15px">${esc(r.Name)}</h3>${hr ? `<span class="chip">${hr.runs} heat-up${hr.runs > 1 ? "s" : ""}</span>` : ""}</div>
+      ${hr ? `<div style="font-size:26px;font-weight:620;margin-top:8px" class="num">${hr.perHour.toFixed(1)}°/hour</div><div class="faint small">From 18° to 21° takes about ${dur(3 / hr.perHour * 60)}. Used for the "ready ≈" times on the room cards.</div>`
+        : `<div class="faint small" style="margin-top:8px">Learning. It needs a heat-up of at least 20 minutes while the dashboard is recording.</div>`}</div>`;
+  }).join("")}</div>`;
+}
+function insHealth() {
+  const hs = S.health.samples || [], ev = S.health.events || [], last = hs[hs.length - 1];
+  const count = k => ev.filter(e => e.kind === k).length;
+  const rs = hs.map(s => s.rssi).filter(v => v < 0);
+  let h = `<div class="section-h"><h2>Hub health</h2><span class="faint small">last 7 days</span></div><div class="grid">
+    <div class="card"><div class="stats">
+      <div class="stat"><div class="k">Up for</div><div class="v num">${last ? dur(last.up / 60) : "–"}</div></div>
+      <div class="stat"><div class="k">Restarts</div><div class="v num">${count("restart")}</div></div>
+      <div class="stat"><div class="k">Wi-Fi drops</div><div class="v num">${ev.filter(e => e.kind === "wifi-drop").reduce((a, e) => a + (parseInt(e.detail) || 1), 0)}</div></div>
+      <div class="stat"><div class="k">Not answering</div><div class="v num">${count("offline")}×</div></div>
+      <div class="stat"><div class="k">Free memory</div><div class="v num">${last ? Math.round(last.heap / 1024) + " KB" : "–"}</div></div>
+      <div class="stat"><div class="k">Data resent</div><div class="v num">${last ? last.retx.toFixed(0) + "%" : "–"}</div></div>
+    </div>
+    ${rs.length > 1 ? `<div style="margin-top:16px"><div class="row between small"><b>Wi-Fi signal</b><span class="faint">now ${rs[rs.length - 1]} dBm · worst ${Math.min(...rs)} · best ${Math.max(...rs)}</span></div>${signalLine(hs)}</div>` : `<div class="faint small" style="margin-top:14px">Signal history fills in every few minutes.</div>`}
+    </div>
+    <div class="card"><h3 style="font-size:15px">Events</h3>
+      ${ev.length ? `<table class="kv" style="margin-top:8px">${[...ev].reverse().slice(0, 15).map(e => `<tr><td class="key" style="width:34%">${new Date(e.t * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"})}</td><td>${eventLabel(e)}${e.detail ? `<div class="faint xs">${esc(e.detail)}</div>` : ""}</td></tr>`).join("")}</table>`
+        : `<div class="faint small" style="margin-top:8px">Nothing yet. Restarts, Wi-Fi drops and outages are logged here.</div>`}
+    </div></div>`;
+  return h;
+}
+function eventLabel(e) {
+  return {restart: `<span class="chip warn">Hub restarted</span>`, "wifi-drop": `<span class="chip warn">Wi-Fi dropped</span>`, offline: `<span class="chip crit">Stopped answering</span>`, online: `<span class="chip good">Answering again</span>`}[e.kind] || esc(e.kind);
+}
+function signalLine(hs) {
+  const pts = hs.filter(s => s.rssi < 0); if (pts.length < 2) return "";
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t, lo = Math.min(...pts.map(p => p.rssi)) - 3, hi = Math.max(...pts.map(p => p.rssi)) + 3, W = 1000, H = 60;
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${((p.t - t0) / Math.max(1, t1 - t0) * W).toFixed(1)} ${(H - (p.rssi - lo) / (hi - lo) * H).toFixed(1)}`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:${H}px;display:block;margin-top:6px" role="img" aria-label="Wi-Fi signal over time"><path d="${d}" fill="none" stroke="var(--temp)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+    <div class="row between faint xs"><span>${new Date(t0 * 1000).toLocaleDateString([], {weekday: "short"})}</span><span>now</span></div>`;
 }
 
 // ---------------- devices ----------------
@@ -928,22 +1055,179 @@ function viewDevices() {
         ${d.ReceptionOfController ? `<div class="stat"><div class="k">Signal</div><div class="v num">${d.ReceptionOfController.Rssi} dBm</div>${d.ReceptionOfController.Lqi != null ? `<div class="faint xs">LQI ${d.ReceptionOfController.Lqi}</div>` : ""}</div>` : ""}
       </div>
       ${pending ? `<div class="callout" style="margin-bottom:12px">A change is waiting to reach this device. Battery devices collect it when they next wake.</div>` : ""}
+      ${d.id === 0 ? hubDetails() : deviceDetails(d)}
       <div class="row between">
         <span class="row"><span class="small">Lock buttons</span><label class="switch"><input type="checkbox" ${d.DeviceLockEnabled ? "checked" : ""} onchange="patch('/data/domain/Device/${d.id}',{DeviceLockEnabled:this.checked},'Lock '+(this.checked?'on':'off'))"><span></span></label></span>
         ${d.id !== 0 ? `<button class="btn sm" onclick="patch('/data/domain/Device/${d.id}',{Identify:true},'Identify sent')">Identify</button>` : ""}
       </div>
       <details style="margin-top:14px"><summary>All fields</summary>${kvEditor(d, "/data/domain/Device/" + d.id, "dev" + d.id)}</details>
     </article>`;
-  }).join("")}</div>`;
+  }).join("")}</div>${zigbeeCard()}${capabilitiesCard()}`;
+}
+const okChip = (v, good = "SetCorrectly") => v == null ? "–" : `<span class="chip ${v === good ? "good" : "warn"}">${v === good ? "OK" : esc(spaced(v))}</span>`;
+function deviceDetails(d) {
+  const back = d.ReceptionOfDevice;
+  return `<table class="kv" style="margin-bottom:12px">
+    ${infoRow("Model", d.ProductModel || d.ModelIdentifier)}
+    ${infoRow("Serial number", d.SerialNumber)}
+    ${infoRow("Firmware", `${d.ActiveFirmwareVersion || "–"}${d.OtaVersion != null ? ` (update version ${d.OtaVersion}, hardware ${d.OtaHardwareVersion})` : ""}`)}
+    ${back ? infoRow("Hub heard by device", `${back.Rssi} dBm${back.Lqi != null ? ", link quality " + back.Lqi : ""}`) : ""}
+    ${infoRow("Zigbee address", d.NodeId != null ? `${d.NodeId}${d.ParentNodeId ? ", via repeater " + d.ParentNodeId : ", direct to hub"}` : null)}
+    <tr><td class="key">Pairing links<div class="faint xs">If not OK, the device may miss commands</div></td><td>${okChip(d.BindingsStatus)}</td></tr>
+    <tr><td class="key">Reporting setup</td><td>${okChip(d.ReportConfigStatus)}</td></tr>
+    ${d.OtaImageQueryCount ? infoRow("Update checks", d.OtaImageQueryCount) : ""}
+  </table>`;
+}
+function hubDetails() {
+  const st = sec("status") || {}, sys = sec("System") || {}, last = (S.health.samples || []).slice(-1)[0];
+  const reasons = {WDT_RST: "Watchdog: it froze and restarted itself", POWER_ON_RST: "Power on", SW_RST: "Software restart"};
+  return `<table class="kv" style="margin-bottom:12px">
+    ${infoRow("Up for", st.uptime != null ? dur(st.uptime / 60) : null)}
+    ${infoRow("Last restart", st.lastResetReason ? reasons[st.lastResetReason] || st.lastResetReason : null)}
+    ${infoRow("Free memory", st.freeHeap != null ? `${Math.round(st.freeHeap / 1024)} KB (lowest ${Math.round(st.lowestFreeHeap / 1024)} KB)` : null)}
+    ${infoRow("System version", sys.ActiveSystemVersion)}
+    ${infoRow("Hardware", sys.HardwareGeneration != null ? "Generation " + sys.HardwareGeneration : null)}
+    ${infoRow("Chip", sys.ChipId)}
+    ${infoRow("Brand", sys.BrandName)}
+    ${last ? infoRow("Wi-Fi drops since restart", last.drops) : ""}
+  </table>`;
+}
+function zigbeeCard() {
+  const z = sec("Zigbee"), st = sec("network")?.Station || {};
+  if (!z) return "";
+  const zc = z.NetworkChannel, wc = st.Channel;
+  // Zigbee channels are 2 MHz wide at 2405 + 5(n−11) MHz; 2.4 GHz Wi-Fi is ~22 MHz wide at 2412 + 5(n−1) MHz.
+  const gap = zc && wc ? Math.abs((2405 + 5 * (zc - 11)) - (2412 + 5 * (wc - 1))) : null;
+  const clash = gap != null && gap < 12;
+  return `<div class="section-h"><h2>Zigbee radio</h2></div><div class="grid"><div class="card">
+    <div class="room-top"><div><h3>Hub's thermostat network</h3><div class="sub">Zigbee, separate from Wi-Fi</div></div>${gap != null ? `<span class="chip ${clash ? "warn" : "good"}">${clash ? "Overlaps Wi-Fi" : "No Wi-Fi overlap"}</span>` : ""}</div>
+    <table class="kv" style="margin-top:12px">
+      ${infoRow("Zigbee channel", zc)}
+      ${infoRow("Hub Wi-Fi channel", wc)}
+      ${infoRow("Radio firmware", z.ZigbeeModuleVersion)}
+      ${infoRow("Radio address", z.ZigbeeEUI)}
+      ${infoRow("Messages handled", z.JPANCount)}
+      ${infoRow("Pairing open", sec("System")?.ZigbeePermitJoinActive ? "Yes, new devices can join" : "No")}
+    </table>
+    <div class="callout ${clash ? "" : "info"}" style="margin-top:12px">${clash ? `Zigbee channel ${zc} sits inside Wi-Fi channel ${wc}. Moving your router's 2.4 GHz network to channel 1 or 6 can make thermostats more reliable.` : `Zigbee channel ${zc} and Wi-Fi channel ${wc} are ${gap} MHz apart, so they don't interfere.`}</div>
+  </div></div>`;
+}
+function capabilitiesCard() {
+  const m = sec("DeviceCapabilityMatrix"); if (!m) return "";
+  const names = {Roomstat: "Room thermostats", ITRV: "Smart radiator valves", SmartPlug: "Smart plugs", UFH: "Underfloor heating controller", UFHFloorTempSensor: "Floor temperature sensor", UFHDewSensor: "Dew sensor", HACT: "Heating actuator", LACT: "Light actuator", Light: "Lights", Shutter: "Shutters", LoadController: "Load controller"};
+  return `<div class="section-h"><h2>This hub can also use</h2></div><div class="card"><div class="row">${Object.entries(m).map(([k, v]) => `<span class="chip ${v ? "good" : ""}">${v ? "✓" : "✕"} ${esc(names[k] || k)}</span>`).join("")}</div>
+    <div class="faint small" style="margin-top:10px">Smart radiator valves would let each room heat on its own instead of by floor. The dashboard already handles them once paired.</div></div>`;
 }
 
 // ---------------- advanced ----------------
 function viewAdvanced() {
-  const sub = {system: advSystem, network: advNetwork, explorer: advExplorer};
+  const sub = {settings: advSettings, alerts: advAlerts, system: advSystem, network: advNetwork, explorer: advExplorer};
+  if (!sub[S.adv]) S.adv = "settings";
+  const nAlerts = (S.state.alerts || []).filter(a => a.level !== "info").length;
   return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Advanced</h1><p class="muted" style="margin:0">Everything the hub exposes. Changes go straight to the hub.</p></section>
-    <div class="row" style="margin:18px 0 0"><div class="seg">${[["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
+    <div class="row" style="margin:18px 0 0"><div class="seg" style="overflow-x:auto;max-width:100%">${[["settings", "Hub settings"], ["alerts", "Alerts" + (nAlerts ? ` (${nAlerts})` : "")], ["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
     <button class="btn sm" style="margin-left:auto" onclick="openSetup()">Hub connection</button></div>
     ${sub[S.adv]()}`;
+}
+function sysSwitch(field, on, label) {
+  return `<label class="switch"><input type="checkbox" ${on ? "checked" : ""} onchange="patch('/data/domain/System',{${field}:this.checked},'${label} '+(this.checked?'on':'off'))"><span></span></label>`;
+}
+function advSettings() {
+  const sys = sec("System") || {}, b = sys.BoilerSettings || {}, fetched = S.state.sections.System?.fetched;
+  const drift = sys.UnixTime && fetched ? Math.round(sys.UnixTime - new Date(fetched).getTime() / 1000) : null;
+  const preheat = [[1800, "30 minutes"], [3600, "1 hour"], [5400, "1.5 hours"], [7200, "2 hours"], [10800, "3 hours"]];
+  if (sys.PreheatTimeLimit != null && !preheat.some(([v]) => v === sys.PreheatTimeLimit)) preheat.push([sys.PreheatTimeLimit, dur(sys.PreheatTimeLimit / 60)]);
+  let awayOpts = `<option value="${OFF}" ${awayTemp() <= OFF ? "selected" : ""}>Off (no heating)</option>`;
+  for (let v = 50; v <= 200; v += 5) awayOpts += `<option value="${v}" ${v === awayTemp() ? "selected" : ""}>${(v / 10).toFixed(1)}°</option>`;
+  const control = {HeatSourceType_RelayControlled: "On/off relay", HeatSourceType_OpenTherm: "OpenTherm"}[b.ControlType] || spaced(b.ControlType || "–");
+  return `<div class="section-h"><h2>Comfort</h2></div><div class="card" style="padding:4px 18px">
+      <div class="setting"><div class="l"><b>Comfort mode</b><span>Starts heating early so rooms <i>reach</i> the scheduled temperature on time. Off: heating starts at the scheduled time.</span></div>${sysSwitch("ComfortModeEnabled", sys.ComfortModeEnabled, "Comfort mode")}</div>
+      <div class="setting"><div class="l"><b>Longest early start</b><span>How far ahead comfort mode may start heating</span></div>
+        <select ${sys.ComfortModeEnabled ? "" : "disabled"} onchange="patch('/data/domain/System',{PreheatTimeLimit:+this.value},'Early start limit saved')">${preheat.map(([v, l]) => `<option value="${v}" ${v === sys.PreheatTimeLimit ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    </div>
+    <div class="section-h"><h2>Away mode</h2></div><div class="card" style="padding:4px 18px">
+      <div class="setting"><div class="l"><b>Away temperature</b><span>What rooms are held at while away (used by "Leaving home")</span></div>
+        <select onchange="patch('/data/domain/System',{AwayModeSetPointLimit:+this.value},'Away temperature saved')">${awayOpts}</select></div>
+      <div class="setting"><div class="l"><b>Hot water off while away</b><span>Also stop heating water when away mode is on</span></div>${sysSwitch("AwayModeAffectsHotWater", sys.AwayModeAffectsHotWater, "Hot water off while away")}</div>
+    </div>
+    <div class="section-h"><h2>Other</h2></div><div class="card" style="padding:4px 18px">
+      <div class="setting"><div class="l"><b>Valve protection</b><span>Briefly opens radiator valves weekly so they don't seize. Only matters with smart radiator valves.</span></div>${sysSwitch("ValveProtectionEnabled", sys.ValveProtectionEnabled, "Valve protection")}</div>
+      <div class="setting"><div class="l"><b>Automatic daylight saving</b><span>Moves the hub's clock for summer time</span></div>${sysSwitch("AutomaticDaylightSaving", sys.AutomaticDaylightSaving, "Automatic daylight saving")}</div>
+      <div class="setting"><div class="l"><b>Hub clock</b><span>${sys.LocalDateAndTime ? `${esc(sys.LocalDateAndTime.Day)} ${String(sys.LocalDateAndTime.Time ?? "").padStart(4, "0").replace(/(\d\d)(\d\d)/, "$1:$2")}, UTC offset ${sys.TimeZoneOffset ?? 0} min` : "–"}</span></div>
+        ${drift == null ? "" : Math.abs(drift) > 300 ? `<span class="chip crit">${dur(Math.abs(drift) / 60)} ${drift > 0 ? "fast" : "slow"}</span>` : `<span class="chip good">Correct</span>`}</div>
+    </div>
+    <div class="section-h"><h2>Boiler</h2><span class="faint small">set by the installer, shown for reference</span></div><div class="card" style="padding:4px 18px"><table class="kv">
+      ${infoRow("Boiler control", control, b.ControlType === "HeatSourceType_RelayControlled" ? "The hub switches the boiler on and off; it can't set its water temperature" : "")}
+      ${infoRow("Fuel", b.FuelType)}
+      ${infoRow("Most starts per hour", b.CycleRate ? b.CycleRate.replace("CPH_", "") : null, "Caps how often the boiler can be switched on")}
+      ${infoRow("Switching band", b.OnOffHysteresis != null ? "±" + (b.OnOffHysteresis / 10).toFixed(1) + "°" : null, "How far a room may drift from target before the boiler switches")}
+      ${infoRow("OpenTherm", sys.OpenThermConnectionStatus === "Connected" ? "Connected" : "Not connected (relay control)", "OpenTherm would let the hub read and modulate the boiler")}
+      ${infoRow("Fallback temperature", sys.DegradedModeSetpointThreshold != null ? deg(sys.DegradedModeSetpointThreshold) : null, "Used if the hub loses track of a room")}
+      ${infoRow("System mode", sys.SystemMode)}
+    </table></div>
+    <div class="section-h"><h2>Hub</h2></div><div class="card" style="padding:4px 18px"><table class="kv">
+      ${infoRow("Heating button on the hub", sys.HeatingButtonOverrideState === "On" ? "Pressed (boost on)" : "Not pressed")}
+      ${infoRow("Hot water button on the hub", sys.HotWaterButtonOverrideState === "On" ? "Pressed (boost on)" : "Not pressed")}
+      ${infoRow("Cloud connection", sys.CloudConnectionStatus, "The Wiser app works away from home only when connected")}
+      ${infoRow("App pairing", sys.PairingStatus ? spaced(sys.PairingStatus) : null)}
+      ${infoRow("Set up", sys.isProvisioned ? "Yes" : "No")}
+      ${infoRow("System version", sys.ActiveSystemVersion)}
+    </table></div>
+    <div class="faint xs" style="margin-top:12px">Settings are stored on the hub, so the Wiser app and Home Assistant see the same values.</div>`;
+}
+function advAlerts() {
+  const al = S.state.alerts || [], st = S.state.settings || {}, off = st.off || {};
+  let minOpts = "";
+  for (let v = 50; v <= 200; v += 5) minOpts += `<option value="${v}" ${v === st.minRoomTemp ? "selected" : ""}>${(v / 10).toFixed(1)}°</option>`;
+  const lvl = {critical: "crit", warning: "warn", info: ""};
+  const yaml = haYaml();
+  return `<div class="section-h"><h2>Right now</h2></div><div class="card">${al.length ? `<table class="kv">${al.map(a => `<tr><td style="width:1%;white-space:nowrap"><span class="chip ${lvl[a.level]}">${esc(a.level)}</span></td><td><b>${esc(a.title)}</b>${a.detail ? `<div class="faint small">${esc(a.detail)}</div>` : ""}</td></tr>`).join("")}</table>` : `<div class="row"><span class="chip good">All clear</span><span class="faint small">Nothing needs attention.</span></div>`}</div>
+    <div class="section-h"><h2>What to watch for</h2></div><div class="card" style="padding:4px 18px">
+      <div class="setting"><div class="l"><b>Minimum room temperature</b><span>Warn when a room drops below this</span></div><select onchange="saveAlertSettings({minRoomTemp:+this.value})">${minOpts}</select></div>
+      ${(st.kinds || []).map(k => `<div class="setting"><div class="l"><b>${esc(k.Label)}</b></div><label class="switch"><input type="checkbox" ${off[k.Kind] ? "" : "checked"} onchange="saveAlertSettings({toggle:'${k.Kind}',on:this.checked})"><span></span></label></div>`).join("")}
+    </div>
+    <div class="section-h"><h2>Phone notifications through Home Assistant</h2></div><div class="card">
+      <p class="small muted" style="margin-top:0">Add this to Home Assistant's <span class="mono">configuration.yaml</span> and restart it. You get a notification whenever a new warning or critical alert appears.${S.state.passwordSet ? " Add <span class=\"mono\">username</span> and <span class=\"mono\">password</span> lines under the resource, since the dashboard has a password." : ""}</p>
+      <pre id="hayaml">${esc(yaml)}</pre>
+      <div class="row" style="margin-top:10px"><button class="btn sm" onclick="copyText(haYaml(),'Copied')">Copy</button><span class="faint xs">The sensor's value is the number of warning and critical alerts; its "summary" lists them.</span></div>
+    </div>`;
+}
+function haYaml() {
+  return `rest:
+  - resource: ${dashURL()}/api/alerts
+    scan_interval: 60
+    sensor:
+      - name: Heating alerts
+        value_template: "{{ value_json.count }}"
+        json_attributes:
+          - summary
+          - level
+          - alerts
+
+automation:
+  - alias: Heating alert
+    triggers:
+      - trigger: state
+        entity_id: sensor.heating_alerts
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state.state | int(0) > trigger.from_state.state | int(0) }}"
+    actions:
+      - action: notify.notify
+        data:
+          title: Heating
+          message: "{{ state_attr('sensor.heating_alerts', 'summary') }}"
+`;
+}
+// The address Home Assistant should use: this page's, unless it was opened as localhost.
+function dashURL() { return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) && S.state.lanURL ? S.state.lanURL : location.origin; }
+async function copyText(t, msg) { try { await navigator.clipboard.writeText(t); toast(msg); } catch { toast("Couldn't copy: select the text instead", true); } }
+async function saveAlertSettings(ch) {
+  const st = S.state.settings || {}, body = {min_room_temp: st.minRoomTemp, off: {...(st.off || {})}};
+  if (ch.minRoomTemp) body.min_room_temp = ch.minRoomTemp;
+  if (ch.toggle) { if (ch.on) delete body.off[ch.toggle]; else body.off[ch.toggle] = true; }
+  try { const r = await api("/api/settings", body); r.ok ? toast("Alert settings saved") : toast(r.error, true); } catch (e) { toast(e.message, true); }
+  poll(true);
 }
 function advSystem() {
   const sys = sec("System") || {};
@@ -955,7 +1239,7 @@ function advSystem() {
       <div class="sub">Hub output ${esc(c.Name)} · ${(c.RoomIds || []).map(id => esc(rooms().find(r => r.id === id)?.Name || id)).join(", ") || "no rooms"}</div></div>
       <span class="chip ${c.HeatingRelayState === "On" ? "heat" : ""}">${c.HeatingRelayState === "On" ? ICON.flame + "On" : "Off"}</span></div>
     <details style="margin-top:12px"><summary>All fields</summary>${kvEditor(c, "/data/domain/HeatingChannel/" + c.id, "hc" + c.id)}</details></div>`).join("")}</div>`;
-  for (const name of ["Zigbee", "Cloud", ...(S.state.extras || [])]) {
+  for (const name of ["Zigbee", "Cloud", "opentherm", "status", ...(S.state.extras || [])]) {
     const d = sec(name); if (d == null) continue;
     h += `<div class="section-h"><h2>${esc(name)}</h2></div>`;
     h += Array.isArray(d) ? `<div class="grid">${d.map(o => `<div class="card">${kvEditor(o, endpointFor(name, o), name + o.id)}</div>`).join("") || `<div class="faint">empty</div>`}</div>` : `<div class="card">${kvEditor(d, endpointFor(name, d), name)}</div>`;
@@ -984,8 +1268,41 @@ function advNetwork() {
         <div class="stat"><div class="k">Wi-Fi up</div><div class="v num">${hc.WifiLastUptime != null ? dur(hc.WifiLastUptime / 60) : "–"}</div></div>
       </div>
       ${retr > 20 ? `<div class="callout crit" style="margin-top:12px">Most of the hub's network traffic is being resent, which is why big responses stall. Improve its Wi-Fi link: a mesh point nearby, or a 2.4 GHz-only network.</div>` : ""}</div></div>`;
+  const ap = n.AccessPoint || {}, pings = hc.ExternalPing_Count, pingFail = hc.ExternalPingFailed_Count;
+  h += `<div class="section-h"><h2>Wi-Fi trouble since the hub last restarted</h2></div><div class="grid">
+    <div class="card"><div class="stats">
+      <div class="stat"><div class="k">Disconnects</div><div class="v num">${hc.StationTransitionToDisconnected_Count ?? "–"}</div></div>
+      <div class="stat"><div class="k">Router not found</div><div class="v num">${hc.WifiStateApNotFound_Count ?? "–"}</div></div>
+      <div class="stat"><div class="k">Login failures</div><div class="v num">${hc.WifiStateAuthFail_Count ?? "–"}</div></div>
+      <div class="stat"><div class="k">Self-repairs</div><div class="v num">${(hc.ReconnectionFix_Count || 0) + (hc.HealthCheckStackRecovery_Count || 0) + (tcp.StackRespawns_Count || 0)}</div></div>
+      <div class="stat"><div class="k">Time offline</div><div class="v num">${hc.WifiTotalDowntime != null ? dur(hc.WifiTotalDowntime / 60) : "–"}</div><div class="faint xs">of ${hc.WifiTotalUptime != null ? dur(hc.WifiTotalUptime / 60) : "–"} online</div></div>
+      <div class="stat"><div class="k">Internet checks failed</div><div class="v num">${pingFail ?? "–"}</div><div class="faint xs">of ${pings ?? "–"}</div></div>
+      <div class="stat"><div class="k">Best signal</div><div class="v num">${st.RSSI?.Max != null ? st.RSSI.Max + " dBm" : "–"}</div></div>
+      <div class="stat"><div class="k">Channel changes</div><div class="v num">${hc.WifiChannelChanges ?? "–"}</div></div>
+    </div>${wifiVerdict(hc, st)}</div>
+    <div class="card"><h3 style="font-size:15px">Router and addresses</h3><table class="kv" style="margin-top:8px">
+      ${infoRow("Router (gateway)", dh.IPv4DefaultGateway)}
+      ${infoRow("DNS", [dh.IPv4PrimaryDNS, dh.IPv4SecondaryDNS].filter(v => v && v !== "0.0.0.0").join(", "))}
+      ${infoRow("Address lease", dh.LeaseTime ? dur(dh.LeaseTime / 60) : null)}
+      ${infoRow("Wi-Fi security", st.SecurityMode ? st.SecurityMode.replace(/_/g, "/") : null)}
+      ${infoRow("Hub MAC address", st.MacAddress)}
+      ${infoRow("Internet check target", hc.IPv4AddressPing)}
+    </table>
+    <div style="margin-top:12px"><button class="btn sm" onclick="go('insights')">Health over time ›</button></div></div>
+    <div class="card"><div class="room-top"><div><h3>Hub's setup network</h3><div class="sub">${esc(ap.NetworkInterface?.HostName || "WiserHeat")} at ${esc(ap.NetworkInterface?.IPv4HostAddress || "192.168.8.1")}</div></div>
+      ${!ap.Enabled ? `<span class="chip good">Off</span>` : `<span class="chip ${ap.SecurityMode === "Open" ? "crit" : "warn"}">On${ap.SecurityMode === "Open" ? ", no password" : ""}</span>`}</div>
+      ${!ap.Enabled ? `<div class="callout info" style="margin-top:12px">Switched off. The hub only opens it in setup mode${ap.SecurityMode === "Open" ? ", and it has no password then, so finish setup promptly whenever you use it" : ""}.</div>`
+        : ap.SecurityMode === "Open" ? `<div class="callout crit" style="margin-top:12px">The hub's setup Wi-Fi <b>${esc(ap.NetworkInterface?.HostName || "WiserHeat…")}</b> is on and has no password: anyone nearby can join it and read the hub's secret. Finish setup, or turn the hub off and on to close it.</div>` : ""}
+    </div></div>`;
   if (st.DetectedAccessPoints?.length) h += `<div class="section-h"><h2>Networks the hub can see</h2></div><div class="card"><table class="kv">${st.DetectedAccessPoints.map(a => `<tr><td class="key">${esc(a.SSID)}</td><td>ch ${a.Channel}</td><td class="num">${a.RSSI} dBm</td></tr>`).join("")}</table></div>`;
   return h + `<div class="section-h"><h2>All network fields</h2></div><div class="card">${kvEditor(n, "/data/network/", "net")}</div>`;
+}
+function wifiVerdict(hc, st) {
+  const tips = [];
+  if (hc.WifiStateApNotFound_Count > 10) tips.push(`The hub couldn't find your router ${hc.WifiStateApNotFound_Count} times. It's near the edge of range, or the router moves its 2.4 GHz channel${hc.WifiChannelChanges ? ` (it has changed ${hc.WifiChannelChanges}×)` : ""}. Fix the router's 2.4 GHz channel (1, 6 or 11), or add a mesh point near the hub.`);
+  if (hc.WifiStateAuthFail_Count > 2) tips.push(`${hc.WifiStateAuthFail_Count} login failures: usually a mesh node with different settings, or WPA3-only security. The hub needs WPA2 on 2.4 GHz.`);
+  if (st.RSSI?.Current < -70) tips.push(`Signal is weak (${st.RSSI.Current} dBm). Under −70 dBm the link gets unreliable.`);
+  return tips.length ? `<div class="callout" style="margin-top:12px">${tips.map(esc).join("<br><br>")}</div>` : `<div class="callout info" style="margin-top:12px">No sign of Wi-Fi trouble.</div>`;
 }
 function advExplorer() {
   const names = Object.keys(S.state.sections).sort();
@@ -1128,8 +1445,10 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && (S.sheet !
 render();
 poll(true);
 pollHistory();
+pollHealth();
 setInterval(poll, 3000);
 setInterval(pollHistory, 60000);
+setInterval(pollHealth, 120000);
 </script>
 </body>
 </html>

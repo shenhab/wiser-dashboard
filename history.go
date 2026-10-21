@@ -190,6 +190,192 @@ func (h *History) Since(t time.Time, max int) []Sample {
 	return out
 }
 
+// samplesGap is the longest silence between samples that still counts as
+// continuous; anything longer means the dashboard or the hub was away.
+const samplesGap = 3 * 60
+
+// shortRun is the run length (minutes) below which a boiler start counts as
+// very short. The hub pulses the boiler within its cycle rate (e.g. 6 an hour,
+// so 10-minute cycles), so runs under 10 minutes are normal; under 5 the
+// boiler barely warms up.
+const shortRun = 5
+
+// CycleStats summarises the relay runs that started on one day.
+type CycleStats struct {
+	Starts  int `json:"starts"`  // off -> on switches seen
+	Minutes int `json:"minutes"` // on-time of the runs counted here
+	Short   int `json:"short"`   // finished runs shorter than shortRun
+	Longest int `json:"longest"`
+	Runs    int `json:"runs"` // finished runs (for averages)
+}
+
+func (c *CycleStats) add(minutes int, counted, finished bool) {
+	c.Minutes += minutes
+	c.Longest = max(c.Longest, minutes)
+	if counted {
+		c.Starts++
+	}
+	if finished && counted {
+		c.Runs++
+		if minutes < shortRun {
+			c.Short++
+		}
+	}
+}
+
+// DayCycles is how often each relay switched on per local calendar day.
+// Boiler is any heating channel or hot water on: that's when the boiler fires.
+type DayCycles struct {
+	Day      string                `json:"day"`
+	Boiler   CycleStats            `json:"boiler"`
+	Channels map[string]CycleStats `json:"channels"`
+	HotWater CycleStats            `json:"hotWater"`
+}
+
+// Cycles counts relay runs per day. A run already on when recording started
+// (or resumed after a gap) adds its minutes but isn't counted as a start.
+func (h *History) Cycles(days int) []DayCycles {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	now := time.Now()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -(days - 1))
+	out := make([]DayCycles, days)
+	idx := map[string]int{}
+	for i := range out {
+		d := start.AddDate(0, 0, i).Format("2006-01-02")
+		out[i] = DayCycles{Day: d, Channels: map[string]CycleStats{}}
+		idx[d] = i
+	}
+	type run struct {
+		on, known, partial bool
+		start, last        int64
+	}
+	runs := map[string]*run{}
+	// record books a run against the day it started.
+	record := func(key string, r *run, end int64, finished bool) {
+		i, ok := idx[time.Unix(r.start, 0).Format("2006-01-02")]
+		if !ok {
+			return
+		}
+		mins := int((end - r.start + 30) / 60)
+		switch key {
+		case "boiler":
+			out[i].Boiler.add(mins, !r.partial, finished)
+		case "hw":
+			out[i].HotWater.add(mins, !r.partial, finished)
+		default:
+			c := out[i].Channels[key]
+			c.add(mins, !r.partial, finished)
+			out[i].Channels[key] = c
+		}
+	}
+	var prevT int64
+	for _, s := range h.samples {
+		if prevT != 0 && s.T-prevT > samplesGap {
+			// The gap hides when runs ended: close them at the last sample.
+			for key, r := range runs {
+				if r.on {
+					record(key, r, r.last, false)
+				}
+			}
+			runs = map[string]*run{}
+		}
+		prevT = s.T
+		state := map[string]bool{"hw": s.HW == 1}
+		anyOn := s.HW == 1
+		for ch, on := range s.Ch {
+			state[ch] = on == 1
+			anyOn = anyOn || on == 1
+		}
+		state["boiler"] = anyOn
+		for key, on := range state {
+			r := runs[key]
+			if r == nil {
+				r = &run{}
+				runs[key] = r
+			}
+			switch {
+			case on && !r.on:
+				*r = run{on: true, known: true, partial: !r.known, start: s.T}
+			case !on && r.on:
+				record(key, r, s.T, true)
+				r.on = false
+			}
+			r.known, r.last = true, s.T
+		}
+	}
+	for key, r := range runs {
+		if r.on {
+			record(key, r, r.last, false)
+		}
+	}
+	return out
+}
+
+// HeatRate is how fast a room warmed while it was calling for heat.
+type HeatRate struct {
+	PerHour float64 `json:"perHour"` // °C per hour, median of the heat-ups seen
+	Runs    int     `json:"runs"`
+}
+
+// HeatRates learns each room's warm-up speed from heat-ups of at least 20
+// minutes in the recorded history.
+func (h *History) HeatRates() map[string]HeatRate {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	type up struct {
+		t0, t1       int64
+		temp0, temp1 int
+		active       bool
+	}
+	cur := map[string]*up{}
+	rates := map[string][]float64{}
+	finish := func(id string, u *up) {
+		if u.active && u.t1-u.t0 >= 20*60 && u.temp1 > u.temp0 {
+			rates[id] = append(rates[id], float64(u.temp1-u.temp0)/10/(float64(u.t1-u.t0)/3600))
+		}
+		u.active = false
+	}
+	var prevT int64
+	for _, s := range h.samples {
+		gap := prevT != 0 && s.T-prevT > samplesGap
+		prevT = s.T
+		for id, v := range s.Rooms {
+			u := cur[id]
+			if u == nil {
+				u = &up{}
+				cur[id] = u
+			}
+			if gap {
+				finish(id, u)
+			}
+			temp, target, demand := v[0], v[1], v[2]
+			heating := demand > 0 && target > temp && temp > -1000
+			switch {
+			case heating && !u.active:
+				*u = up{t0: s.T, t1: s.T, temp0: temp, temp1: temp, active: true}
+			case heating:
+				u.t1, u.temp1 = s.T, temp
+			case u.active:
+				finish(id, u)
+			}
+		}
+	}
+	for id, u := range cur {
+		finish(id, u)
+	}
+	out := map[string]HeatRate{}
+	for id, rs := range rates {
+		sort.Float64s(rs)
+		m := rs[len(rs)/2]
+		if len(rs)%2 == 0 {
+			m = (rs[len(rs)/2-1] + rs[len(rs)/2]) / 2
+		}
+		out[id] = HeatRate{PerHour: m, Runs: len(rs)}
+	}
+	return out
+}
+
 // DayRuntime is how long each relay was on, per local calendar day.
 type DayRuntime struct {
 	Day      string         `json:"day"` // YYYY-MM-DD

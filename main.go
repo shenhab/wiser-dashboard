@@ -55,11 +55,14 @@ func main() {
 	store := NewStore()
 	poller := NewPoller(hub, store)
 	history := NewHistory(filepath.Join(filepath.Dir(*configPath), "history.jsonl"))
-	srv := &Server{hub: hub, store: store, poller: poller, history: history, configPath: *configPath, password: *password, labels: cfg.ChannelNames}
+	health := NewHealth(filepath.Join(filepath.Dir(*configPath), "health.jsonl"))
+	srv := &Server{hub: hub, store: store, poller: poller, history: history, health: health, configPath: *configPath, password: *password, listen: *listen,
+		labels: cfg.ChannelNames, alertSettings: cfg.Alerts}
 
 	hub.SetTarget(cfg.HubIP, cfg.Secret)
 	go poller.Run(ctx)
 	go history.Run(ctx, store)
+	go health.Run(ctx, store, hub)
 	go bootstrap(ctx, srv, cfg, !*noDiscover)
 
 	httpSrv := &http.Server{Addr: *listen, Handler: srv.routes(), ReadHeaderTimeout: 10 * time.Second}
@@ -119,21 +122,35 @@ func bootstrap(ctx context.Context, srv *Server, cfg Config, allowDiscovery bool
 }
 
 func printURLs(listen string) {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
+	if _, _, err := net.SplitHostPort(listen); err != nil {
 		log.Printf("listening on %s", listen)
 		return
 	}
+	log.Printf("dashboard: %s", strings.Join(localURLs(listen), "  "))
+}
+
+// localURLs lists the addresses the dashboard can be opened at: localhost
+// first, then this machine's network addresses (private LAN ranges first).
+func localURLs(listen string) []string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return nil
+	}
 	if host != "" && host != "0.0.0.0" && host != "::" {
-		log.Printf("dashboard: http://%s", net.JoinHostPort(host, port))
-		return
+		return []string{"http://" + net.JoinHostPort(host, port)}
 	}
 	urls := []string{fmt.Sprintf("http://localhost:%s", port)}
+	var lan, other []string
 	addrs, _ := net.InterfaceAddrs()
 	for _, a := range addrs {
 		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil && !ipn.IP.IsLoopback() && !ipn.IP.IsLinkLocalUnicast() {
-			urls = append(urls, fmt.Sprintf("http://%s:%s", ipn.IP, port))
+			u := fmt.Sprintf("http://%s:%s", ipn.IP, port)
+			if ipn.IP.To4()[0] == 192 && ipn.IP.To4()[1] == 168 {
+				lan = append(lan, u)
+			} else {
+				other = append(other, u)
+			}
 		}
 	}
-	log.Printf("dashboard: %s", strings.Join(urls, "  "))
+	return append(append(urls, lan...), other...)
 }

@@ -22,14 +22,17 @@ type Server struct {
 	store      *Store
 	poller     *Poller
 	history    *History
+	health     *Health
 	configPath string
 	password   string
+	listen     string
 
-	mu          sync.Mutex
-	labels      map[string]string // heating channel id -> display name
-	candidates  []Candidate
-	discovering bool
-	lastScan    time.Time
+	mu            sync.Mutex
+	labels        map[string]string // heating channel id -> display name
+	alertSettings AlertSettings
+	candidates    []Candidate
+	discovering   bool
+	lastScan      time.Time
 }
 
 func (s *Server) routes() http.Handler {
@@ -42,6 +45,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/channel-name", s.handleChannelName)
 	mux.HandleFunc("POST /api/room-zone", s.handleRoomZone)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
+	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/alerts", s.handleAlerts)
+	mux.HandleFunc("POST /api/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/setup/discover", s.handleDiscover)
 	mux.HandleFunc("POST /api/setup/fetch-secret", s.handleFetchSecret)
@@ -85,17 +91,33 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	for k, v := range s.labels {
 		labels[k] = v
 	}
+	settings := s.alertSettings
 	s.mu.Unlock()
+	if settings.MinRoomTemp == 0 {
+		settings.MinRoomTemp = defaultMinRoomTemp
+	}
 	writeJSON(w, 200, map[string]any{
 		"configured":   ip != "" && secret != "",
 		"hubIP":        ip,
 		"channelNames": labels,
+		"alerts":       s.alerts(),
+		"passwordSet":  s.password != "",
+		"lanURL":       s.lanURL(),
+		"settings":     map[string]any{"minRoomTemp": settings.MinRoomTemp, "off": settings.Off, "kinds": alertKinds},
 		"queue":        s.hub.queued.Load(),
 		"busy":         s.hub.busy.Load(),
 		"sections":     s.store.Snapshot(),
 		"extras":       s.poller.Extras(),
 		"now":          time.Now(),
 	})
+}
+
+// lanURL is the first network address other devices can reach the dashboard at.
+func (s *Server) lanURL() string {
+	if urls := localURLs(s.listen); len(urls) > 1 {
+		return urls[1]
+	}
+	return ""
 }
 
 type rawRequest struct {
@@ -179,9 +201,27 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	days = min(days, historyDays)
 	writeJSON(w, 200, map[string]any{
-		"samples": s.history.Since(time.Now().Add(-time.Duration(hours)*time.Hour), 1500),
-		"runtime": s.history.Runtime(days),
+		"samples":   s.history.Since(time.Now().Add(-time.Duration(hours)*time.Hour), 1500),
+		"runtime":   s.history.Runtime(days),
+		"cycles":    s.history.Cycles(days),
+		"heatRates": s.history.HeatRates(),
 	})
+}
+
+// handleHealth serves the hub health log (?days=7, max 14 days).
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	days, err := strconv.Atoi(r.URL.Query().Get("days"))
+	if err != nil || days <= 0 {
+		days = 7
+	}
+	samples, events := s.health.Since(time.Now().AddDate(0, 0, -min(days, historyDays)))
+	if samples == nil {
+		samples = []HealthSample{}
+	}
+	if events == nil {
+		events = []HealthEvent{}
+	}
+	writeJSON(w, 200, map[string]any{"samples": samples, "events": events})
 }
 
 func (s *Server) handleChannelName(w http.ResponseWriter, r *http.Request) {
@@ -325,7 +365,7 @@ func (s *Server) save(ip, secret string) error {
 		return nil
 	}
 	s.mu.Lock()
-	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels}
+	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings}
 	err := saveConfig(s.configPath, cfg)
 	s.mu.Unlock()
 	return err
