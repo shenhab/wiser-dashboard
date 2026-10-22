@@ -108,7 +108,7 @@ func newMCPTestServer(t *testing.T) (*httptest.Server, *fakeHub) {
 	]`)
 	cache("HotWater", `[{"id":2,"WaterHeatingState":"Off","Mode":"Auto","OverrideType":"None","HotWaterRelayState":"Off","ScheduleId":1000}]`)
 	cache("HeatingChannel", `[{"id":1,"Name":"Channel-1","RoomIds":[2],"HeatingRelayState":"On"},{"id":3,"Name":"Channel-3","RoomIds":[1],"HeatingRelayState":"Off"}]`)
-	cache("System", `{"AwayModeSetPointLimit":150}`)
+	cache("System", `{"AwayModeSetPointLimit":150,"OverrideType":"Away"}`)
 	store.set("schedules", []byte(`{"Heating":[{"id":2,"Name":"Ground","Monday":{"Time":[630,2200],"DegreesC":[210,-200]}}],"OnOff":[{"id":1000,"Monday":[630,-700,1530,-1600]}]}`), 0)
 
 	history := NewHistory("")
@@ -253,6 +253,9 @@ func TestMCPReadTools(t *testing.T) {
 	}
 	if ground["target"] != 20.0 || ground["heating"] != true || ground["setpoint_source"] != "boost" || ground["override_until"] == nil {
 		t.Errorf("ground floor: %v", ground)
+	}
+	if st["away_mode"] != true {
+		t.Error("away mode set on the hub isn't reported (no room shows it as its target's source)")
 	}
 	if st["boiler_running"] != true || st["hot_water"].(map[string]any)["heating"] != false {
 		t.Errorf("boiler/hot water: %v", st)

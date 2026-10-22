@@ -453,6 +453,12 @@ func (s *Server) mcpStatus() (any, error) {
 		away = away || strOf(r["SetpointOrigin"]) == "FromAwayMode"
 	}
 	out["rooms"] = rs
+	// The hub's own flag; rooms only show "away mode" as their target's source
+	// when the away temperature is above what their schedule asks for.
+	var sys map[string]any
+	if s.section("System", &sys) == nil && strOf(sys["OverrideType"]) == "Away" {
+		away = true
+	}
 	out["away_mode"] = away
 
 	var hw []map[string]any
