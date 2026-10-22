@@ -31,6 +31,7 @@ type Server struct {
 	mu            sync.Mutex
 	labels        map[string]string // heating channel id -> display name
 	alertSettings AlertSettings
+	boost         BoostSettings // Matter boost switches
 	candidates    []Candidate
 	discovering   bool
 	lastScan      time.Time
@@ -51,6 +52,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/matter", s.handleMatter)
 	mux.HandleFunc("POST /api/matter/reset", s.handleMatterReset)
+	mux.HandleFunc("POST /api/matter/boost", s.handleMatterBoost)
 	mux.HandleFunc("GET /api/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/setup/discover", s.handleDiscover)
 	mux.HandleFunc("POST /api/setup/fetch-secret", s.handleFetchSecret)
@@ -369,7 +371,7 @@ func (s *Server) save(ip, secret string) error {
 		return nil
 	}
 	s.mu.Lock()
-	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings}
+	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost}
 	err := saveConfig(s.configPath, cfg)
 	s.mu.Unlock()
 	return err
@@ -387,6 +389,31 @@ func (s *Server) handleMatterReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.matter.Reset(); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleMatterBoost saves the boost switch settings and hands them to the bridge.
+func (s *Server) handleMatterBoost(w http.ResponseWriter, r *http.Request) {
+	var b BoostSettings
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": "bad request: " + err.Error()})
+		return
+	}
+	if b.Minutes < 15 || b.Minutes > 240 || b.Delta < 5 || b.Delta > 50 {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": "minutes must be 15-240 and the increase 0.5-5°"})
+		return
+	}
+	s.mu.Lock()
+	s.boost = b.withDefaults()
+	s.mu.Unlock()
+	if s.matter != nil {
+		s.matter.SetBoost(b)
+	}
+	ip, secret := s.hub.Target()
+	if err := s.save(ip, secret); err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}

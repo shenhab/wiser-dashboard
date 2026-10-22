@@ -71,7 +71,9 @@ func main() {
 	health := NewHealth(filepath.Join(filepath.Dir(*configPath), "health.jsonl"))
 	srv := &Server{hub: hub, store: store, poller: poller, history: history, health: health, configPath: *configPath, password: *password, listen: *listen,
 		labels: cfg.ChannelNames, alertSettings: cfg.Alerts}
+	srv.boost = cfg.Boost.withDefaults()
 	if m := NewMatter(hub, *matterBin, filepath.Join(filepath.Dir(*configPath), "matter"), *matterPort, *listen); *matterOn && m.Available() {
+		m.SetBoost(srv.boost)
 		srv.matter = m
 	}
 

@@ -25,6 +25,27 @@ import (
 // can point -matter-bin at one.
 var matterBinary []byte
 
+// BoostSettings shape the bridge's per-room heating boost switches in Google
+// Home and the other Matter apps.
+type BoostSettings struct {
+	Minutes int             `json:"minutes"` // how long a boost lasts
+	Delta   int             `json:"delta"`   // tenths of a degree above the room temperature
+	Off     map[string]bool `json:"off"`     // room id -> no boost switch for this room
+}
+
+func (b BoostSettings) withDefaults() BoostSettings {
+	if b.Minutes <= 0 {
+		b.Minutes = 30
+	}
+	if b.Delta <= 0 {
+		b.Delta = 30
+	}
+	if b.Off == nil {
+		b.Off = map[string]bool{}
+	}
+	return b
+}
+
 // MatterStatus is what the bridge last reported about itself.
 type MatterStatus struct {
 	Version      string   `json:"version"`
@@ -51,11 +72,20 @@ type Matter struct {
 	port     int    // Matter UDP port
 	localURL string // where the bridge reaches the dashboard's /data/ API
 
-	mu      sync.Mutex
-	status  *MatterStatus
-	running bool
-	lastErr string
-	stdin   io.WriteCloser
+	mu       sync.Mutex
+	status   *MatterStatus
+	running  bool
+	lastErr  string
+	stdin    io.WriteCloser
+	boost    BoostSettings
+	boostVer int // bumped on every change, so a running bridge gets it
+}
+
+// SetBoost changes the boost switches; a running bridge applies it within seconds.
+func (m *Matter) SetBoost(b BoostSettings) {
+	m.mu.Lock()
+	m.boost, m.boostVer = b.withDefaults(), m.boostVer+1
+	m.mu.Unlock()
 }
 
 func NewMatter(hub *Hub, bin, dir string, port int, listen string) *Matter {
@@ -190,7 +220,7 @@ func (m *Matter) runOnce(ctx context.Context) error {
 	// changes (setup page). The bridge uses the same secret as the hub.
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	sent := ""
+	sent, sentBoost := "", -1
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
 	for {
@@ -198,6 +228,15 @@ func (m *Matter) runOnce(ctx context.Context) error {
 			msg, _ := json.Marshal(map[string]string{"url": m.localURL, "secret": secret})
 			if m.send(msg) == nil {
 				sent = secret
+			}
+		}
+		m.mu.Lock()
+		ver, boost := m.boostVer, m.boost
+		m.mu.Unlock()
+		if ver != sentBoost {
+			msg, _ := json.Marshal(map[string]any{"boost": boost})
+			if m.send(msg) == nil {
+				sentBoost = ver
 			}
 		}
 		select {
@@ -252,5 +291,6 @@ func (m *Matter) State() map[string]any {
 		"running":   m.running,
 		"error":     m.lastErr,
 		"status":    m.status,
+		"boost":     m.boost,
 	}
 }

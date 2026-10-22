@@ -16,6 +16,7 @@ type Config struct {
 	// channel id ("1" -> "Ground Floor"). The hub's own names are untouched.
 	ChannelNames map[string]string `json:"channel_names,omitempty"`
 	Alerts       AlertSettings     `json:"alerts"`
+	Boost        BoostSettings     `json:"matter_boost"`
 }
 
 func defaultConfigPath() string {

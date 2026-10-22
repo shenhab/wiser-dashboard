@@ -156,6 +156,15 @@ await hw.on();
 p = await until(() => patches.find(x => x.path === "/data/domain/HotWater/2"), 30_000);
 check("hot water boost reaches the hub", p?.data.RequestOverride.DurationMinutes === 30);
 
+// Boost switch settings: saved by the dashboard, applied by the bridge.
+const devicesBefore = (await api("/api/matter")).status.devices;
+const saved = await (await fetch(`http://${DASH}/api/matter/boost`, { method: "POST", body: JSON.stringify({ minutes: 60, delta: 20, off: { 1: true } }) })).json();
+check("boost settings are accepted", saved.ok === true, JSON.stringify(saved));
+const fewer = await until(async () => (await api("/api/matter")).status?.devices === devicesBefore - 1, 20_000);
+check("the bridge drops Upper Floor's boost switch", !!fewer, `${devicesBefore} -> ${devicesBefore - 1}`);
+const bad = await (await fetch(`http://${DASH}/api/matter/boost`, { method: "POST", body: JSON.stringify({ minutes: 1000, delta: 20 }) })).json();
+check("out-of-range settings are refused", bad.ok === false);
+
 // ---------------------------------------------------------------- restart the whole app
 let exit = await stopApp(app);
 check("dashboard stops cleanly with the bridge", exit === 0, `exit ${exit}`);
@@ -166,6 +175,11 @@ const again = await until(async () => {
     return m.status?.devices >= 3 && m;
 }, 90_000);
 check("after restarting the app it is still paired", again?.status?.commissioned === true);
+const kept = await until(async () => {
+    const m = await api("/api/matter");
+    return m.boost?.minutes === 60 && m.boost?.off?.["1"] === true && m.status?.devices === devicesBefore - 1;
+}, 30_000);
+check("boost settings survive the restart", !!kept);
 hub.Room[1].CalculatedTemperature = 175;
 const fresh = await until(async () => (await ground.getLocalTemperatureAttribute(true)) === 1750, 120_000);
 check("controller reconnects and sees new hub data", !!fresh);

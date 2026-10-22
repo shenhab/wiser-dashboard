@@ -1213,18 +1213,30 @@ function advSmartHome() {
   if (!m.available) return `<div class="section-h"><h2>Google Home, Apple Home and Alexa</h2></div><div class="card"><p class="small muted" style="margin:0">This build doesn't include the Matter bridge. The downloads on the Releases page do; a build of your own needs <span class="mono">-tags matter</span>, see the README.</p></div>`;
   if (!st) return `<div class="section-h"><h2>Google Home, Apple Home and Alexa</h2></div><div class="card"><div class="row"><span class="spin"></span><span class="small">Starting the Matter bridge…</span></div>${m.error ? `<p class="small" style="color:var(--crit)">${esc(m.error)}</p>` : ""}</div>`;
   const rs = rooms(), fabrics = st.fabrics || [];
+  const boost = {minutes: 30, delta: 30, off: {}, ...(m.boost || {})};
   const chips = `<div class="row" style="flex-wrap:wrap;gap:8px">
       ${st.commissioned ? `<span class="chip good">Paired</span>` : `<span class="chip warn">Not paired yet</span>`}
       ${m.running ? (st.hubReachable ? `<span class="chip good">Reading the hub</span>` : `<span class="chip warn">Waiting for hub data</span>`) : `<span class="chip crit">Bridge stopped${m.error ? ": " + esc(m.error) : ""}</span>`}
       <span class="faint xs">${st.devices} devices · UDP port ${st.port}${st.version ? " · " + esc(st.version) : ""}</span></div>`;
   const devices = `<div class="section-h"><h2>What your apps will see</h2></div><div class="card"><table class="kv">
       ${rs.map(r => `<tr><td><b>${esc(r.Name)}</b></td><td class="small muted">Thermostat: temperature, target, heat or off</td></tr>`).join("")}
+      ${rs.filter(r => !boost.off?.[r.id]).map(r => `<tr><td><b>${esc(r.Name)} heating boost</b></td><td class="small muted">Switch: on raises ${esc(r.Name)} to its temperature +${(boost.delta / 10).toFixed(1).replace(".0", "")}° for ${dur(boost.minutes)}, off goes back to the schedule</td></tr>`).join("")}
       ${(sec("HotWater") || []).length ? `<tr><td><b>Hot water</b></td><td class="small muted">Switch: on boosts it for 30 minutes, off turns it off</td></tr>` : ""}
     </table><p class="faint xs" style="margin:10px 0 0">Changing a target or turning a room on holds it until the next schedule change, like the Wiser app does.</p></div>
+    <div class="section-h"><h2>Heating boost switches</h2></div><div class="card" style="padding:4px 18px">
+      <div class="setting"><div class="l"><b>Boost length</b><span>How long a boost switch keeps the room warmer</span></div>
+        <select onchange="saveBoost({minutes:+this.value})">${[15, 30, 45, 60, 90, 120, 180].map(v => `<option value="${v}" ${v === boost.minutes ? "selected" : ""}>${dur(v)}</option>`).join("")}</select></div>
+      <div class="setting"><div class="l"><b>Temperature increase</b><span>Above the room's current temperature; a higher target is kept</span></div>
+        <select onchange="saveBoost({delta:+this.value})">${[10, 15, 20, 25, 30, 35, 40, 45, 50].map(v => `<option value="${v}" ${v === boost.delta ? "selected" : ""}>+${(v / 10).toFixed(1)}°</option>`).join("")}</select></div>
+      ${rs.map(r => `<div class="setting"><div class="l"><b>${esc(r.Name)} heating boost</b><span>Show this switch in your apps</span></div><label class="switch"><input type="checkbox" ${boost.off?.[r.id] ? "" : "checked"} onchange="saveBoost({room:${r.id},on:this.checked})"><span></span></label></div>`).join("")}
+    </div>
+    <details class="small" style="margin-top:10px"><summary>Say "boost ground floor heater" instead of "turn on …"</summary>
+      <p class="muted">Google only understands "turn on" for switches. For your own phrase, add a routine once in the Google Home app: <b>Automations → + → Household → Add starter → When I say to Google Assistant</b>, type e.g. <i>boost ground floor heater</i>, then <b>Add action → Adjust home devices</b>, pick <i>Ground Floor heating boost</i> and <b>Turn on</b>. Save. You can also rename the switches in the app; the bridge keeps working.</p></details>
     <div class="section-h"><h2>Try saying</h2></div><div class="card small">
       <div>"Hey Google, set ${esc(rs[0]?.Name || "the living room")} to 21 degrees"</div>
       <div style="margin-top:6px">"Hey Google, what's the temperature in ${esc(rs[1]?.Name || rs[0]?.Name || "the kitchen")}?"</div>
       <div style="margin-top:6px">"Hey Google, turn on hot water"</div>
+      ${rs[0] && !boost.off?.[rs[0].id] ? `<div style="margin-top:6px">"Hey Google, turn on ${esc(rs[0].Name)} heating boost"</div>` : ""}
       <p class="faint xs" style="margin:10px 0 0">Works away from home too, through your Google Nest speaker, display or TV streamer, which must stay plugged in at home. Gemini can control these the same way.</p></div>`;
   if (!st.commissioned) {
     return `<div class="section-h"><h2>Connect to Google Home, Apple Home or Alexa</h2></div><div class="card">${chips}
@@ -1250,6 +1262,18 @@ function advSmartHome() {
     </div>${devices}
     <div class="section-h"><h2>Start over</h2></div><div class="card"><div class="setting"><div class="l"><b>Remove all pairings</b><span>Disconnects every app. You'll need to pair again with the QR code.</span></div>
       <button class="btn sm" onclick="matterReset(this)">${S.confirmReset ? "Click again to remove" : "Remove"}</button></div></div>`;
+}
+async function saveBoost(change) {
+  const cur = {minutes: 30, delta: 30, off: {}, ...(S.state.matter?.boost || {})};
+  const next = {minutes: cur.minutes, delta: cur.delta, off: {...cur.off}};
+  if (change.minutes) next.minutes = change.minutes;
+  if (change.delta) next.delta = change.delta;
+  if (change.room != null) { if (change.on) delete next.off[change.room]; else next.off[change.room] = true; }
+  try {
+    const r = await api("/api/matter/boost", next);
+    r.ok ? toast("Saved; your apps update within a minute") : toast(r.error, true);
+  } catch (e) { toast(e.message, true); }
+  poll(true);
 }
 async function matterReset() {
   if (!S.confirmReset) { S.confirmReset = true; render(); setTimeout(() => { S.confirmReset = false; render(); }, 5000); return; }

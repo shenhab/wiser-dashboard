@@ -84,6 +84,15 @@ function loadIdentity(): Identity {
 
 // ---------------------------------------------------------------- dashboard link
 
+// Per-room heating boost switches: on = current temperature + delta for
+// minutes, off = back to the schedule. Set from the dashboard's Google Home page.
+interface BoostSettings {
+    minutes: number;
+    delta: number; // tenths of a degree
+    off: Record<string, boolean>; // room id -> no switch
+}
+let boostSettings: BoostSettings = { minutes: 30, delta: 30, off: {} };
+
 let dashboardURL = process.env.WISER_URL ?? "";
 let secret = process.env.WISER_SECRET ?? "";
 
@@ -93,6 +102,10 @@ createInterface({ input: process.stdin }).on("line", line => {
         if (typeof msg.url === "string") dashboardURL = msg.url.replace(/\/$/, "");
         if (typeof msg.secret === "string") secret = msg.secret;
         if (msg.cmd === "reset") void reset();
+        if (msg.boost && typeof msg.boost === "object") {
+            boostSettings = { ...boostSettings, ...msg.boost };
+            syncSoon();
+        }
     } catch {
         log("ignoring a bad line on stdin");
     }
@@ -146,6 +159,8 @@ const HotWaterDevice = OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationS
 
 const rooms = new Map<number, Endpoint<typeof RoomDevice>>();
 const hotWater = new Map<number, Endpoint<typeof HotWaterDevice>>();
+const boosts = new Map<number, Endpoint<typeof HotWaterDevice>>(); // room id -> boost switch
+let lastDomain: any = null;
 const heldUntil = new Map<string, number>(); // endpoint id -> time its pending command settles
 const lastOnSetpoint = new Map<number, number>(); // room id -> last setpoint that wasn't "off"
 
@@ -262,6 +277,63 @@ function watchHotWater(hwId: number, ep: Endpoint<typeof HotWaterDevice>) {
     });
 }
 
+function boostLabel(room: any) {
+    return label(`${room.Name ?? `Room ${room.id}`} heating boost`);
+}
+
+function addBoost(room: any) {
+    const id = `boost-${room.id}`;
+    const ep = new Endpoint(HotWaterDevice, {
+        id,
+        bridgedDeviceBasicInformation: {
+            nodeLabel: boostLabel(room),
+            productName: "Wiser room boost",
+            uniqueId: `${identity.serial}-${id}`,
+            reachable: true,
+        },
+    });
+    boosts.set(room.id, ep);
+    return ep;
+}
+
+// boosting: the hub is running a timed override in this room (from this
+// switch, the dashboard or the Wiser app).
+function boosting(room: any) {
+    return room.OverrideType && room.OverrideType !== "None" && (room.OverrideTimeoutUnixTime ?? 0) > Date.now() / 1000;
+}
+
+// boostSetpoint is the current temperature plus the delta, never below the
+// room's current target, in the hub's half-degree steps (tenths).
+function boostSetpoint(room: any) {
+    const temp = typeof room.CalculatedTemperature === "number" && room.CalculatedTemperature > -1000 ? room.CalculatedTemperature : null;
+    const target = typeof room.CurrentSetPoint === "number" && room.CurrentSetPoint > OFF ? room.CurrentSetPoint : null;
+    let sp = temp !== null ? temp + boostSettings.delta : (target ?? 200) + boostSettings.delta;
+    if (target !== null) sp = Math.max(sp, target);
+    return Math.min(MAX_SETPOINT / 10, Math.max(MIN_SETPOINT / 10, Math.round(sp / 5) * 5));
+}
+
+function watchBoost(roomId: number, ep: Endpoint<typeof HotWaterDevice>) {
+    const key = `boost-${roomId}`;
+    const path = `/data/domain/Room/${roomId}`;
+    ep.events.onOff.onOff$Changed.on((on, _old, context) => {
+        if (context?.fabric === undefined) return;
+        hold(`room-${roomId}`); // the thermostat shows the boost once the hub reports it
+        if (!on) {
+            void command(key, path, { RequestOverride: { Type: "None" } }, `${key} cancelled`);
+            return;
+        }
+        const room = (lastDomain?.Room ?? []).find((r: any) => r.id === roomId) ?? { id: roomId };
+        const sp = boostSetpoint(room);
+        const minutes = boostSettings.minutes;
+        void command(
+            key,
+            path,
+            { RequestOverride: { Type: "Manual", SetPoint: sp, DurationMinutes: minutes, Originator: "App" } },
+            `${key} to ${sp / 10}° for ${minutes} min`,
+        );
+    });
+}
+
 // ---------------------------------------------------------------- sync from the hub
 
 let lastGood = 0;
@@ -271,10 +343,38 @@ let lastError = "";
 async function setReachable(value: boolean) {
     if (reachable === value) return;
     reachable = value;
-    for (const ep of [...rooms.values(), ...hotWater.values()]) {
+    for (const ep of [...rooms.values(), ...hotWater.values(), ...boosts.values()]) {
         await ep.set({ bridgedDeviceBasicInformation: { reachable: value } });
     }
     log(value ? "hub reachable again" : "hub unreachable");
+}
+
+async function syncBoost(room: any) {
+    let ep = boosts.get(room.id);
+    if (boostSettings.off[String(room.id)]) {
+        if (ep) {
+            boosts.delete(room.id);
+            await ep.delete();
+            log(`removed ${boostLabel(room)}`);
+        }
+        return;
+    }
+    if (!ep) {
+        ep = addBoost(room);
+        await bridge.add(ep);
+        watchBoost(room.id, ep);
+        log(`added ${boostLabel(room)}`);
+    }
+    const update: Record<string, any> = { bridgedDeviceBasicInformation: { nodeLabel: boostLabel(room) } };
+    if (!held(`boost-${room.id}`)) update.onOff = { onOff: !!boosting(room) };
+    await ep.set(update);
+}
+
+// Syncs run one at a time: the poll timer and settings changes both start them.
+let syncChain: Promise<void> = Promise.resolve();
+function syncSoon() {
+    syncChain = syncChain.then(sync).catch(e => log(`sync failed: ${(e as Error).message}`));
+    return syncChain;
 }
 
 async function sync() {
@@ -283,6 +383,7 @@ async function sync() {
         domain = await hub("GET", "/data/domain/");
         lastGood = Date.now();
         lastError = "";
+        lastDomain = domain;
     } catch (e) {
         lastError = (e as Error).message;
         if (lastGood && Date.now() - lastGood > UNREACHABLE_AFTER_MS) await setReachable(false);
@@ -298,6 +399,7 @@ async function sync() {
             watchRoom(room.id, ep);
             log(`added room ${room.Name}`);
         }
+        await syncBoost(room);
         if (held(`room-${room.id}`)) continue;
         const update: Record<string, number> = {};
         if (typeof room.CalculatedTemperature === "number" && room.CalculatedTemperature > -1000) {
@@ -320,6 +422,8 @@ async function sync() {
         if (!(domain.Room ?? []).some((r: any) => r.id === id)) {
             rooms.delete(id);
             await ep.delete();
+            await boosts.get(id)?.delete();
+            boosts.delete(id);
             log(`removed room ${id}`);
         }
     }
@@ -369,7 +473,7 @@ function status() {
         qrCode: codes.qrPairingCode,
         qrRows: qrRows(codes.qrPairingCode),
         fabrics,
-        devices: rooms.size + hotWater.size,
+        devices: rooms.size + hotWater.size + boosts.size,
         hubReachable: reachable && lastGood > 0,
         error: lastError,
     });
@@ -403,7 +507,7 @@ server.events.commissioning.fabricsChanged.on(() => status());
 
 // Add the devices before going online, so controllers see them at pairing.
 for (let i = 0; i < 12 && rooms.size === 0; i++) {
-    await sync();
+    await syncSoon();
     if (rooms.size === 0) await new Promise(r => setTimeout(r, POLL_MS));
 }
 await server.start();
@@ -412,11 +516,11 @@ status();
 
 let lastStatus = "";
 setInterval(async () => {
-    await sync();
+    await syncSoon();
     // Pairing changes are also caught here: after the last controller removes
     // the bridge, matter.js resets the node without the lifecycle events.
     const fabrics = server.state.operationalCredentials.fabrics?.length ?? 0;
-    const now = JSON.stringify([reachable, lastGood > 0, lastError, rooms.size, hotWater.size, fabrics]);
+    const now = JSON.stringify([reachable, lastGood > 0, lastError, rooms.size, hotWater.size, boosts.size, fabrics]);
     if (now !== lastStatus) {
         lastStatus = now;
         status();

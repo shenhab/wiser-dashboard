@@ -67,7 +67,14 @@ const mock = createServer((req, res) => {
             patches.push({ path: req.url, data });
             const item = domain[m[1]].find(x => x.id === Number(m[2]));
             const ov = data.RequestOverride;
-            if (m[1] === "Room") item.CurrentSetPoint = ov.SetPoint;
+            if (m[1] === "Room" && ov.Type === "None") {
+                // back to the schedule, which says 20° in this mock
+                Object.assign(item, { CurrentSetPoint: 200, OverrideType: "None", OverrideTimeoutUnixTime: 0 });
+            } else if (m[1] === "Room") {
+                item.CurrentSetPoint = ov.SetPoint;
+                item.OverrideType = "Manual";
+                item.OverrideTimeoutUnixTime = ov.DurationMinutes ? Math.floor(Date.now() / 1000) + ov.DurationMinutes * 60 : 0;
+            }
             else item.WaterHeatingState = ov.SetPoint > 0 ? "On" : "Off";
             res.writeHead(200).end(JSON.stringify(item));
             return;
@@ -100,7 +107,7 @@ await until(() => unauthorized > 0, 10_000);
 check("wrong secret is refused by the API", unauthorized > 0);
 bridge.stdin.write(JSON.stringify({ secret: SECRET }) + "\n");
 
-const first = await until(() => statuses.find(s => s.devices >= 3), 60_000);
+const first = await until(() => statuses.find(s => s.devices >= 5), 60_000);
 check("bridge starts and reports pairing codes", !!first?.manualCode, first && `manual ${first.manualCode}, ${first.devices} devices`);
 if (!first) {
     console.log(bridgeLog);
@@ -160,6 +167,9 @@ const upper = await byName("Upper Floor");
 const ground = await byName("Ground Floor");
 const hw = await byName("Hot water");
 check("rooms and hot water appear as devices", !!(upper && ground && hw));
+const upperBoost = await byName("Upper Floor heating boost");
+const groundBoost = await byName("Ground Floor heating boost");
+check("each room has a heating boost switch", !!(upperBoost && groundBoost));
 
 const tUpper = upper.getClusterClient(Thermostat.Cluster);
 const tGround = ground.getClusterClient(Thermostat.Cluster);
@@ -213,6 +223,53 @@ await hwOnOff.off();
 p = await until(() => patches.find(x => x.path === "/data/domain/HotWater/2"));
 check("hot water off", p?.data.RequestOverride.SetPoint === -200, JSON.stringify(p?.data));
 
+// Heating boost switches: on = current temperature + 3° for 30 min, off = back to schedule.
+const gBoost = groundBoost.getClusterClient(OnOff.Cluster);
+const uBoost = upperBoost.getClusterClient(OnOff.Cluster);
+check("boost switch starts off", (await gBoost.getOnOffAttribute(true)) === false);
+Object.assign(domain.Room[1], { CalculatedTemperature: 183, CurrentSetPoint: 200, OverrideType: "None", OverrideTimeoutUnixTime: 0 });
+await sleep(6_000); // let the bridge see the new room state
+patches.length = 0;
+await gBoost.on();
+p = await until(() => patches.find(x => x.path === "/data/domain/Room/2"));
+check(
+    "boost: 18.3° + 3° = 21.5° (half-degree steps) for 30 min",
+    p?.data.RequestOverride.SetPoint === 215 && p?.data.RequestOverride.DurationMinutes === 30 && p?.data.RequestOverride.Type === "Manual",
+    JSON.stringify(p?.data),
+);
+const shownOn = await until(async () => (await gBoost.getOnOffAttribute(true)) === true, 40_000);
+check("boost switch shows on while the hub is boosting", !!shownOn);
+patches.length = 0;
+await gBoost.off();
+p = await until(() => patches.find(x => x.path === "/data/domain/Room/2"));
+check("boost off: back to schedule", p?.data.RequestOverride.Type === "None", JSON.stringify(p?.data));
+
+// A boost never lowers a higher target.
+Object.assign(domain.Room[0], { CalculatedTemperature: 190, CurrentSetPoint: 240, OverrideType: "None", OverrideTimeoutUnixTime: 0 });
+await sleep(6_000);
+patches.length = 0;
+await uBoost.on();
+p = await until(() => patches.find(x => x.path === "/data/domain/Room/1"));
+check("boost keeps a higher target (24° stays 24°)", p?.data.RequestOverride.SetPoint === 240, JSON.stringify(p?.data));
+
+// A boost that ends on the hub turns the switch off by itself.
+domain.Room[0].OverrideTimeoutUnixTime = Math.floor(Date.now() / 1000) - 1;
+domain.Room[0].OverrideType = "None";
+const endedOff = await until(async () => (await uBoost.getOnOffAttribute(true)) === false, 60_000);
+check("boost switch turns off when the boost ends", !!endedOff);
+
+// Settings from the dashboard: length, increase, and which rooms get a switch.
+bridge.stdin.write(JSON.stringify({ boost: { minutes: 60, delta: 20, off: { 1: true } } }) + "\n");
+const removed = await until(() => statuses.findLast(s => s.devices === 4), 20_000);
+check("turning a room's switch off in settings removes it", !!removed);
+patches.length = 0;
+await gBoost.on();
+p = await until(() => patches.find(x => x.path === "/data/domain/Room/2"));
+check("new settings apply: +2° for 60 min", p?.data.RequestOverride.DurationMinutes === 60 && p?.data.RequestOverride.SetPoint === 205, JSON.stringify(p?.data));
+bridge.stdin.write(JSON.stringify({ boost: { minutes: 30, delta: 30, off: {} } }) + "\n");
+const back = await until(() => statuses.findLast(s => s.devices === 5), 20_000);
+check("turning it back on brings the switch back", !!back);
+
 // Changes on the hub side reach the controller (held values settle after 20 s).
 domain.Room[0].CalculatedTemperature = 230;
 const seen = await until(async () => (await tUpper.getLocalTemperatureAttribute(true)) === 2300, 40_000);
@@ -225,7 +282,7 @@ check("no storage left unclosed", !bridgeLog.includes("was not closed"));
 const before = statuses.length;
 bridge = startBridge();
 bridge.stdin.write(JSON.stringify({ url: `http://127.0.0.1:${PORT}`, secret: SECRET }) + "\n");
-const again = await until(() => statuses.slice(before).find(s => s.devices >= 3), 60_000);
+const again = await until(() => statuses.slice(before).find(s => s.devices >= 5), 60_000);
 check("after a restart the bridge is still paired", again?.commissioned === true && again?.fabrics?.length === 1);
 domain.Room[1].CalculatedTemperature = 185;
 const reconnected = await until(async () => {
