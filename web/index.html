@@ -752,11 +752,100 @@ function renderOverlay() {
   const o = $("#overlay");
   const prevScroll = o.querySelector(".sheet")?.scrollTop || 0;
   if (S.setupOpen) { o.innerHTML = setupHTML(); return; }
+  if (S.add) { if (document.activeElement?.id !== "add-room-name") o.innerHTML = addDeviceHTML(); return; }
   if (S.sheet == null) { o.innerHTML = ""; return; }
   const r = rooms().find(r => r.id === S.sheet);
   if (!r) { o.innerHTML = ""; return; }
   o.innerHTML = `<div class="scrim" onclick="closeOverlay()"></div><aside class="sheet" role="dialog" aria-label="${esc(r.Name)}">${roomSheet(r)}</aside>`;
   o.querySelector(".sheet").scrollTop = prevScroll;
+}
+// ---------------- add a device (beta) ----------------
+const KIND = {RoomStat: "Room thermostat", iTRV: "Radiator valve", SmartPlug: "Smart plug", HeatingActuator: "Heating actuator", UnderFloorHeating: "Underfloor heating controller"};
+const ATTACHABLE = {RoomStat: "RoomStatId", iTRV: "SmartValveIds", HeatingActuator: "HeatingActuatorIds", UnderFloorHeating: "UnderFloorHeatingIds"};
+function openAddDevice() { S.add = {step: "intro"}; render(); }
+function closeAddDevice() { clearInterval(S.addTimer); S.add = null; render(); }
+async function startPairing() {
+  const a = S.add;
+  a.busy = true; a.error = ""; render();
+  try {
+    const r = await api("/api/devices/permit-join", {seconds: 120});
+    if (!r.ok) throw new Error(r.error);
+    a.until = +new Date(r.until);
+    a.known = a.known || (sec("Device") || []).map(d => d.id);
+    a.step = "waiting";
+  } catch (e) { a.error = e.message; }
+  a.busy = false; render();
+  clearInterval(S.addTimer);
+  S.addTimer = setInterval(watchForDevices, 5000);
+}
+async function watchForDevices() {
+  const a = S.add;
+  if (!a) return clearInterval(S.addTimer);
+  try { await api("/api/refresh", {section: "Device"}); await poll(true); } catch {}
+  const found = (sec("Device") || []).filter(d => d.id !== 0 && !a.known.includes(d.id));
+  if (found.length && a.step === "waiting") { a.step = "found"; a.device = found[0].id; }
+  a.found = found;
+  if (a.step === "waiting" && Date.now() > a.until + 15000) { a.step = "timeout"; clearInterval(S.addTimer); }
+  if (a.step !== "waiting") clearInterval(S.addTimer);
+  render();
+}
+async function blinkDevice(id) {
+  try {
+    const r = await api("/api/devices/identify", {device: id, on: true});
+    if (!r.ok) throw new Error(r.error);
+    toast("Blinking… battery devices may take a moment to respond");
+    setTimeout(() => api("/api/devices/identify", {device: id, on: false}).catch(() => {}), 15000);
+  } catch (e) { toast(e.message, true); }
+}
+async function attachDevice() {
+  const a = S.add;
+  a.busy = true; a.error = ""; render();
+  try {
+    let room = a.room;
+    if (room === "new") {
+      const r = await api("/api/rooms", {name: a.newName || ""});
+      if (!r.ok) throw new Error(r.error);
+      room = r.room;
+    }
+    const r = await api("/api/devices/attach", {device: a.device, room: +room});
+    if (!r.ok) throw new Error(r.error);
+    a.step = "done"; a.roomName = (rooms().find(x => x.id === +room) || {}).Name || a.newName;
+    clearInterval(S.addTimer);
+    poll(true);
+  } catch (e) { a.error = e.message; }
+  a.busy = false; render();
+}
+function addDeviceHTML() {
+  const a = S.add, devs = a.found || [];
+  const dev = devs.find(d => d.id === a.device) || {};
+  const kind = dev.ProductType, field = ATTACHABLE[kind];
+  const left = a.until ? Math.max(0, Math.round((a.until - Date.now()) / 1000)) : 0;
+  let body = "";
+  if (a.step === "intro") body = `<p class="small">This puts the hub in pairing mode for 2 minutes, finds the new device and attaches it to a room.</p>
+      <ol class="small steps"><li>Have the device ready, with batteries in or plugged in.</li><li>Click <b>Start pairing</b>, then put the device in pairing mode the way its instructions say (often a long press until its light flashes).</li><li>When it appears here, choose its room.</li></ol>
+      <p class="faint xs">Beta: attaching to a room uses the hub's local API the way the hub reports it; the dashboard checks the hub kept the change, and if not, the Wiser app does this step.</p>
+      <div class="row" style="justify-content:flex-end;gap:8px"><button class="btn" onclick="closeAddDevice()">Cancel</button><button class="btn primary" ${a.busy ? "disabled" : ""} onclick="startPairing()">${a.busy ? "Starting…" : "Start pairing"}</button></div>`;
+  else if (a.step === "waiting") body = `<div class="row" style="gap:10px"><span class="spin"></span><b>Waiting for a new device…</b><span class="chip">${left}s left</span></div>
+      <p class="small muted">Put the device in pairing mode now. New devices can take up to a minute to appear.</p>
+      <div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeAddDevice()">Cancel</button></div>`;
+  else if (a.step === "timeout") body = `<p class="small"><b>No new device joined.</b> Check it's in pairing mode and near the hub (or a mains-powered Wiser device), then try again.</p>
+      <div class="row" style="justify-content:flex-end;gap:8px"><button class="btn" onclick="closeAddDevice()">Close</button><button class="btn primary" onclick="startPairing()">Try again</button></div>`;
+  else if (a.step === "found") {
+    const rs = rooms(), options = kind === "RoomStat" ? rs.filter(r => !r.RoomStatId) : rs;
+    if (a.room == null) a.room = options[0] ? String(options[0].id) : "new";
+    body = `<div class="setting" style="padding-top:0"><div class="l"><b>${esc(KIND[kind] || kind || "New device")}</b><span>Device ${dev.id}${dev.ModelIdentifier ? " · " + esc(dev.ModelIdentifier) : ""}</span></div><button class="btn sm" onclick="blinkDevice(${dev.id})">Blink</button></div>
+      ${devs.length > 1 ? `<p class="faint xs">${devs.length} new devices joined; this is the first. Attach it, then the next.</p>` : ""}
+      ${field ? `<label class="small"><b>Room</b></label>
+        <select style="width:100%;margin:6px 0" onchange="S.add.room=this.value;render()">${options.map(r => `<option value="${r.id}" ${a.room === String(r.id) ? "selected" : ""}>${esc(r.Name)}</option>`).join("")}<option value="new" ${a.room === "new" ? "selected" : ""}>New room…</option></select>
+        ${a.room === "new" ? `<input id="add-room-name" placeholder="Room name" value="${esc(a.newName || "")}" oninput="S.add.newName=this.value" style="width:100%;margin-bottom:6px">` : ""}
+        ${kind === "RoomStat" && options.length < rs.length ? `<p class="faint xs">Rooms that already have a thermostat aren't listed; a room has one.</p>` : ""}
+        <div class="row" style="justify-content:flex-end;gap:8px"><button class="btn" onclick="closeAddDevice()">Later</button><button class="btn primary" ${a.busy ? "disabled" : ""} onclick="attachDevice()">${a.busy ? "Attaching…" : "Attach"}</button></div>`
+      : `<p class="small">It joined the hub. ${esc(KIND[kind] || "This device")}s are set up in the Wiser app.</p><div class="row" style="justify-content:flex-end"><button class="btn primary" onclick="closeAddDevice()">Done</button></div>`}`;
+  } else if (a.step === "done") body = `<p><span class="chip good">Done</span> ${esc(KIND[kind] || "The device")} is now in <b>${esc(a.roomName || "the room")}</b>; the hub confirmed it.</p>
+      <div class="row" style="justify-content:flex-end"><button class="btn primary" onclick="closeAddDevice()">Close</button></div>`;
+  return `<div class="scrim" onclick="${a.step === "waiting" ? "" : "closeAddDevice()"}"></div><div class="modal" role="dialog" aria-label="Add a device" style="max-width:460px">
+    <h2 style="margin-top:0">Add a device <span class="chip">beta</span></h2>${body}
+    ${a.error ? `<p class="small" style="color:var(--crit)">${esc(a.error)}</p>${a.step === "found" ? `<p class="faint xs">You can do this step in the Wiser app instead.</p>` : ""}` : ""}</div>`;
 }
 function roomSheet(r) {
   const chans = sec("HeatingChannel") || [], scheds = sec("schedules")?.Heating || [];
@@ -1054,7 +1143,7 @@ function viewDevices() {
   const devs = sec("Device") || [], rs = rooms();
   const m = S.state.matter || {};
   const nudge = m.available && m.status && !m.status.commissioned && !(m.status.fabrics || []).length ? `<div class="card row" style="margin-top:16px;justify-content:space-between;flex-wrap:wrap;gap:10px"><div><b>Use with Google Home, Apple Home or Alexa</b><div class="faint small">Voice control and remote access for your rooms and hot water</div></div><button class="btn sm primary" onclick="go('advanced','smarthome')">Connect</button></div>` : "";
-  return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Devices</h1></section>${nudge}<div class="section-h"><h2>On the network</h2></div>
+  return `<section class="hero row" style="padding-bottom:0;justify-content:space-between;flex-wrap:wrap;gap:10px"><h1 style="margin-bottom:4px">Devices</h1><button class="btn sm" onclick="openAddDevice()">Add a device</button></section>${nudge}<div class="section-h"><h2>On the network</h2></div>
   <div class="grid">${devs.map(d => {
     const room = rs.find(r => r.RoomStatId === d.id);
     const sig = d.DisplayedSignalStrength || "–";
