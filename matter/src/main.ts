@@ -489,7 +489,9 @@ function status() {
         type: "status",
         version: VERSION,
         port,
-        commissioned: server.state.commissioning.commissioned,
+        // The pairings themselves are what count: after Google Home pairs, the
+        // commissioned flag can still read false while its fabric is there.
+        commissioned: server.state.commissioning.commissioned || fabrics.length > 0,
         manualCode: codes.manualPairingCode,
         qrCode: codes.qrPairingCode,
         qrRows: qrRows(codes.qrPairingCode),
