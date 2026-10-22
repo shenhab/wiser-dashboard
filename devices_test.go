@@ -222,3 +222,27 @@ func TestCreateRoomAndPermitJoin(t *testing.T) {
 		t.Errorf("hub writes:\n%s\nwant:\n%s", strings.Join(h.writes, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+func TestUnassignedDevices(t *testing.T) {
+	ts, _ := newDeviceTestServer(t)
+	res, err := http.Get(ts.URL + "/api/devices/unassigned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out struct {
+		OK      bool
+		Devices []map[string]any
+		Rooms   []map[string]any
+	}
+	json.NewDecoder(res.Body).Decode(&out)
+	var ids []int
+	for _, d := range out.Devices {
+		ids = append(ids, intOf(d["id"]))
+	}
+	// 5 and 6 are thermostats in no room, 8 a valve in no room; 1, 2 and 7 are in
+	// rooms, and the smart plug (9) isn't attached to rooms this way.
+	if !out.OK || len(ids) != 3 || ids[0] != 5 || ids[1] != 6 || ids[2] != 8 || len(out.Rooms) != 4 {
+		t.Errorf("unassigned: ok=%v devices=%v rooms=%d", out.OK, ids, len(out.Rooms))
+	}
+}

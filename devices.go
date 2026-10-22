@@ -109,6 +109,41 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": false, "error": "the hub accepted the new room but doesn't list it"})
 }
 
+// handleUnassigned reads rooms and devices straight from the hub (the cached
+// copy can lag right after a device leaves or joins) and lists the devices
+// that belong in a room but aren't in one.
+func (s *Server) handleUnassigned(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	rooms, err := s.hubList(ctx, "Room")
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	devices, err := s.hubList(ctx, "Device")
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	free := []map[string]any{}
+	for _, d := range devices {
+		id := intOf(d["id"])
+		field, ok := roomField[strOf(d["ProductType"])]
+		if !ok || id == 0 {
+			continue
+		}
+		inRoom := false
+		for _, rm := range rooms {
+			inRoom = inRoom || hasDevice(rm[field.name], id)
+		}
+		if !inRoom {
+			free = append(free, d)
+		}
+	}
+	s.poller.Refresh("Room")
+	writeJSON(w, 200, map[string]any{"ok": true, "devices": free, "rooms": rooms})
+}
+
 // handleAttachDevice puts a device in a room and confirms the hub kept it.
 func (s *Server) handleAttachDevice(w http.ResponseWriter, r *http.Request) {
 	var req struct {
