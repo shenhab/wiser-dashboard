@@ -5,6 +5,8 @@
 # Local settings and data, in case they're ever kept next to the code
 config.json
 history.jsonl
+health.jsonl
+hub-data.json
 *_secret.txt
 
 .DS_Store
