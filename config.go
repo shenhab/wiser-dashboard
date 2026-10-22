@@ -17,7 +17,8 @@ type Config struct {
 	ChannelNames map[string]string `json:"channel_names,omitempty"`
 	Alerts       AlertSettings     `json:"alerts"`
 	Boost        BoostSettings     `json:"matter_boost"`
-	MCPToken     string            `json:"mcp_token,omitempty"` // access to /mcp for AI assistants
+	MCPToken     string            `json:"mcp_token,omitempty"`   // access to /mcp for AI assistants
+	AutoUpdate   bool              `json:"auto_update,omitempty"` // install new releases by itself (opt-in)
 }
 
 func defaultConfigPath() string {

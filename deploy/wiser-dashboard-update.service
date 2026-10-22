@@ -1,0 +1,14 @@
+# Started by wiser-dashboard-update.path. Runs as root: downloads the latest
+# release, checks its SHA-256 checksum and that it runs, puts it in place of
+# /usr/local/bin/wiser-dashboard and restarts the service. The outcome is
+# shown in the dashboard (Advanced -> System -> Updates).
+
+[Unit]
+Description=Install a Wiser Dashboard update
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wiser-dashboard self-update -state /var/lib/wiser-dashboard -service wiser-dashboard
+EnvironmentFile=-/etc/wiser-dashboard.env

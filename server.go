@@ -34,6 +34,8 @@ type Server struct {
 	boost         BoostSettings // Matter boost switches
 	mcpToken      string
 	mcpOff        bool // -mcp=false
+	updater       *Updater
+	autoUpdate    bool
 	candidates    []Candidate
 	discovering   bool
 	lastScan      time.Time
@@ -57,6 +59,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/matter/boost", s.handleMatterBoost)
 	mux.HandleFunc("GET /api/mcp", s.handleMCPInfo)
 	mux.HandleFunc("POST /api/mcp/token", s.handleMCPToken)
+	mux.HandleFunc("GET /api/update", s.handleUpdate)
+	mux.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
+	mux.HandleFunc("POST /api/update/install", s.handleUpdateInstall)
+	mux.HandleFunc("POST /api/update/auto", s.handleUpdateAuto)
 	mux.HandleFunc("GET /api/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/setup/discover", s.handleDiscover)
 	mux.HandleFunc("POST /api/setup/fetch-secret", s.handleFetchSecret)
@@ -123,6 +129,8 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		"sections":     s.store.Snapshot(),
 		"extras":       s.poller.Extras(),
 		"matter":       s.matter.State(),
+		"version":      version,
+		"update":       s.updater.State(),
 		"now":          time.Now(),
 	})
 }
@@ -380,7 +388,7 @@ func (s *Server) save(ip, secret string) error {
 		return nil
 	}
 	s.mu.Lock()
-	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost, MCPToken: s.mcpToken}
+	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost, MCPToken: s.mcpToken, AutoUpdate: s.autoUpdate}
 	err := saveConfig(s.configPath, cfg)
 	s.mu.Unlock()
 	return err
@@ -445,6 +453,47 @@ func (s *Server) handleMCPInfo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMCPToken(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.mcpToken = newMCPToken()
+	s.mu.Unlock()
+	ip, secret := s.hub.Target()
+	if err := s.save(ip, secret); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleUpdate reports this version and whether a newer one is available.
+func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.updater.State())
+}
+
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	s.updater.Check(r.Context())
+	writeJSON(w, 200, s.updater.State())
+}
+
+// handleUpdateInstall starts the update; the dashboard restarts when it's done.
+func (s *Server) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
+	st := s.updater.State()
+	if !st.Available || st.Busy != "" {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "no update to install right now"})
+		return
+	}
+	go s.updater.Install(context.Background())
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleUpdateAuto turns automatic updates on or off.
+func (s *Server) handleUpdateAuto(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		On bool `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": "bad request"})
+		return
+	}
+	s.mu.Lock()
+	s.autoUpdate = req.On
 	s.mu.Unlock()
 	ip, secret := s.hub.Target()
 	if err := s.save(ip, secret); err != nil {

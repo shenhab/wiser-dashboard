@@ -371,10 +371,13 @@ async function run(key, fn) {
 async function poll(force) {
   try { S.state = await api("/api/state"); }
   catch { $("#status").innerHTML = `<span class="dot err"></span><span class="txt">Dashboard server unreachable</span>`; return; }
+  // After an update the server is a new version: reload to get its page too.
+  if (S.version && S.state.version && S.state.version !== S.version) { localSet("updated", S.state.version); location.reload(); return; }
+  S.version = S.state.version;
   settlePending();
   renderStatus();
   if (!S.state.configured && !S.setupOpen) openSetup();
-  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras, S.state.alerts, S.state.settings, S.state.matter]);
+  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras, S.state.alerts, S.state.settings, S.state.matter, S.state.update]);
   const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.closest(".modal");
   if (force || (sig !== S.lastSig && !typing && !S.edit)) { S.lastSig = sig; render(); }
 }
@@ -405,6 +408,8 @@ function renderStatus() {
     ${st.queue > 0 ? `<span class="chip warn"><span class="spin"></span>${st.queue} sending</span>` : ""}
     <span class="dot ${dot}" title="${esc(st.hubIP || "")}"></span>
     <span class="txt">${!st.configured ? "Not connected" : fresh ? "Updated " + ago(fresh) : "Connecting…"}</span>
+    ${st.update?.busy && st.update.busy !== "checking" ? `<span class="chip warn"><span class="spin"></span>Updating…</span>` : st.update?.available ? `<button class="chip heat" style="border:0;cursor:pointer" onclick="go('advanced','system')" title="Version ${esc(st.update.latest)} is available">Update available</button>` : ""}
+    <span class="txt faint xs" title="Wiser Dashboard version">${esc(st.version || "")}</span>
     <button class="icon-btn" title="Switch theme" aria-label="Switch theme" onclick="toggleTheme()" style="width:30px;height:30px">${theme === "dark" ? ICON.sun : ICON.moon}</button>`;
 }
 function toggleTheme() {
@@ -1357,9 +1362,51 @@ async function saveAlertSettings(ch) {
   try { const r = await api("/api/settings", body); r.ok ? toast("Alert settings saved") : toast(r.error, true); } catch (e) { toast(e.message, true); }
   poll(true);
 }
+// ---------------- updates ----------------
+function updateCard() {
+  const u = S.state.update || {}, cur = esc(u.current || S.state.version || "");
+  const canInstall = u.method === "self" || u.method === "helper";
+  let status;
+  if (u.method === "dev") status = `<span class="chip">Development build</span><span class="faint small">Updates compare release versions; this build was made from source.</span>`;
+  else if (u.busy === "checking") status = `<span class="spin"></span><span class="small">Checking for updates…</span>`;
+  else if (u.busy) status = `<span class="spin"></span><span class="small">${u.busy === "restarting" ? "Restarting into the new version…" : u.busy === "downloading" ? "Downloading and checking the update…" : "Installing the update…"} The page reloads when it's back.</span>`;
+  else if (u.available) status = `<span class="chip heat">Version ${esc(u.latest)} is available</span>${u.notesUrl ? `<a class="small" href="${esc(u.notesUrl)}" target="_blank" rel="noopener">What's new</a>` : ""}`;
+  else if (u.checkedAt && !u.checkedAt.startsWith("0001")) status = `<span class="chip good">Up to date</span><span class="faint small">Checked ${ago(u.checkedAt)}</span>`;
+  else status = `<span class="faint small">Not checked yet</span>`;
+  const manual = `<p class="small muted" style="margin:10px 0 0">This install can't replace its own program. To update, run the install command again:</p>
+    <pre style="white-space:pre-wrap">curl -fsSL https://raw.githubusercontent.com/shenhab/wiser-dashboard/main/install.sh | sh</pre>`;
+  return `<div class="section-h"><h2>Updates</h2></div><div class="card">
+      <div class="setting" style="padding-top:0"><div class="l"><b>Wiser Dashboard ${cur}</b><span>Updates come from the project's GitHub releases and are checked (SHA-256) before they're installed.</span></div>
+        ${u.method !== "dev" ? `<button class="btn sm" ${u.busy ? "disabled" : ""} onclick="updateCheck()">Check now</button>` : ""}</div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin:4px 0 6px">${status}</div>
+      ${u.available && !u.busy && canInstall ? `<button class="btn primary" onclick="updateInstall(this)">Update now to ${esc(u.latest)}</button><span class="faint xs" style="margin-left:8px">Takes about a minute; the dashboard restarts and Google Home reconnects by itself.</span>` : ""}
+      ${u.available && u.method === "manual" ? manual : ""}
+      ${u.error ? `<p class="small" style="color:var(--crit);margin:10px 0 0">${esc(u.error)}</p>` : ""}
+      ${u.lastResult ? `<p class="faint xs" style="margin:10px 0 0">${esc(u.lastResult)}</p>` : ""}
+      ${canInstall ? `<div class="setting" style="margin-top:10px"><div class="l"><b>Install updates automatically</b><span>Checks every 6 hours and installs new releases by itself. Off: you'll see them here and install with the button.</span></div>
+        <label class="switch"><input type="checkbox" ${u.auto ? "checked" : ""} onchange="updateAuto(this.checked)"><span></span></label></div>` : ""}
+    </div>`;
+}
+async function updateCheck() {
+  S.state.update = {...(S.state.update || {}), busy: "checking"}; render();
+  try { S.state.update = await api("/api/update/check", {}); } catch (e) { toast(e.message, true); }
+  render();
+}
+async function updateInstall(btn) {
+  btn.disabled = true;
+  try {
+    const r = await api("/api/update/install", {});
+    r.ok ? toast("Updating… the dashboard restarts in a moment") : toast(r.error, true);
+  } catch (e) { toast(e.message, true); }
+  poll(true);
+}
+async function updateAuto(on) {
+  try { const r = await api("/api/update/auto", {on}); r.ok ? toast(on ? "Automatic updates on" : "Automatic updates off") : toast(r.error, true); } catch (e) { toast(e.message, true); }
+  poll(true);
+}
 function advSystem() {
   const sys = sec("System") || {};
-  let h = `<div class="section-h"><h2>System</h2></div><div class="card">${kvEditor(sys, "/data/domain/System", "sys")}</div>`;
+  let h = updateCard() + `<div class="section-h"><h2>System</h2></div><div class="card">${kvEditor(sys, "/data/domain/System", "sys")}</div>`;
   const chans = sec("HeatingChannel") || [];
   h += `<div class="section-h"><h2>Heating zones</h2></div><div class="grid">${chans.map(c => `<div class="card">
     <div class="room-top"><div>${S.edit === "ch:" + c.id ? `<input type="text" id="editbox" value="${esc(chName(c))}" onkeydown="if(event.key==='Enter')saveChName(${c.id})"> <button class="btn sm primary" onclick="saveChName(${c.id})">Save</button>`
@@ -1574,6 +1621,7 @@ render();
 poll(true);
 pollHistory();
 pollHealth();
+{ const v = localGet("updated"); if (v) { toast("Updated to " + v); try { localStorage.removeItem("wiser.updated"); } catch {} } }
 setInterval(poll, 3000);
 setInterval(pollHistory, 60000);
 setInterval(pollHealth, 120000);

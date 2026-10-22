@@ -97,6 +97,7 @@ else
 fi
 UNIT=/etc/systemd/system/wiser-dashboard.service
 DROPIN=/etc/systemd/system/wiser-dashboard.service.d/10-install.conf
+UPDATE_UNITS="wiser-dashboard-update.path wiser-dashboard-update.service"
 
 # stop_running stops whatever this installer started before (service, login
 # item or background copy), so the binary can be replaced.
@@ -121,8 +122,9 @@ if [ "$UNINSTALL" = 1 ]; then
 	say "Removing Wiser Dashboard ($MODE)"
 	stop_running
 	if [ "$SYSTEMD" = 1 ]; then
-		$SUDO systemctl disable wiser-dashboard 2>/dev/null || true
+		$SUDO systemctl disable wiser-dashboard wiser-dashboard-update.path 2>/dev/null || true
 		$SUDO rm -f "$UNIT" "$DROPIN"
+		for u in $UPDATE_UNITS; do $SUDO rm -f "/etc/systemd/system/$u"; done
 		$SUDO rmdir /etc/systemd/system/wiser-dashboard.service.d 2>/dev/null || true
 		$SUDO systemctl daemon-reload
 		$SUDO rm -f "$BIN"
@@ -224,6 +226,13 @@ if [ "$SYSTEMD" = 1 ]; then
 	fi
 	$SUDO install -m 755 "$PKG/wiser-dashboard" "$BIN"
 	$SUDO install -m 644 "$PKG/wiser-dashboard.service" "$UNIT"
+	# The update helper (in releases from v1.4.0): lets the dashboard update
+	# itself without the service being allowed to change its own program.
+	HELPER=0
+	if [ -f "$PKG/wiser-dashboard-update.path" ]; then
+		for u in $UPDATE_UNITS; do $SUDO install -m 644 "$PKG/$u" "/etc/systemd/system/$u"; done
+		HELPER=1
+	fi
 	if [ -n "${WISER_SECRET:-}" ]; then
 		printf '%s\n' "$WISER_SECRET" | $SUDO sh -c 'umask 077; cat > /etc/wiser-dashboard.secret'
 	fi
@@ -253,6 +262,7 @@ if [ "$SYSTEMD" = 1 ]; then
 	$SUDO systemctl daemon-reload
 	$SUDO systemctl enable --quiet wiser-dashboard
 	$SUDO systemctl restart wiser-dashboard
+	[ "$HELPER" = 1 ] && $SUDO systemctl enable --quiet --now wiser-dashboard-update.path
 	if [ "$FIREWALL" = 1 ] && [ -f "$PKG/open-firewall.sh" ]; then
 		if $SUDO env WISER_PORT="$PORT" sh "$PKG/open-firewall.sh" >/dev/null 2>&1; then
 			say "Firewall: opened the ports to your local network (if a firewall is active)"
