@@ -89,6 +89,7 @@ jobs:
           mkdir -p "pkg/$name" dist
           go build -trimpath -ldflags="-s -w -X main.version=$version" -o "pkg/$name/$bin" .
           cp README.md "pkg/$name/"
+          [ "$GOOS" = linux ] && cp deploy/wiser-dashboard.service "pkg/$name/"
           cd pkg
           if [ "$GOOS" = windows ]; then
             zip -qr "../dist/$name.zip" "$name"

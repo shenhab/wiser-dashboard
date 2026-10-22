@@ -31,6 +31,28 @@ the full list); the Alerts page has a ready-made Home Assistant REST sensor and 
 
 **Anyone who can open the dashboard can control the heating.** Use `-password` if your network isn't trusted.
 
+## Run as a service (Linux)
+
+`deploy/wiser-dashboard.service` (also in the Linux release archives) runs it under systemd as its own
+locked-down user, starts it at boot and restarts it if it stops. From the unpacked archive:
+
+```sh
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin wiser-dashboard
+sudo install -m 755 wiser-dashboard /usr/local/bin/
+sudo install -m 640 -g wiser-dashboard ~/wiser_secret.txt /etc/wiser-dashboard.secret
+sudo install -m 644 wiser-dashboard.service /etc/systemd/system/
+sudo systemctl enable --now wiser-dashboard
+journalctl -u wiser-dashboard -f        # its log
+```
+
+It finds the hub by itself; add `-hub IP` to `ExecStart` (then `sudo systemctl daemon-reload`) to skip
+the scan. Config, history and health logs are kept in `/var/lib/wiser-dashboard`. To keep history from an
+earlier install, stop the service, copy `history.jsonl` and `health.jsonl` there, run
+`sudo chown wiser-dashboard: /var/lib/wiser-dashboard/*`, and start it again. A dashboard password goes in
+`/etc/wiser-dashboard.env` as `WISER_DASHBOARD_PASSWORD=...`.
+
+To upgrade, install the new binary over `/usr/local/bin/wiser-dashboard` and `sudo systemctl restart wiser-dashboard`.
+
 ## Home Assistant
 
 The Wiser integration reads the hub's whole state in one request (`/data/v2/domain/`), which hubs with a bad
