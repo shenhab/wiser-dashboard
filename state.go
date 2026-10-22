@@ -15,6 +15,9 @@ type Entry struct {
 	Fetched time.Time       `json:"fetched"`
 	Error   string          `json:"error,omitempty"`
 	Millis  int64           `json:"ms"`
+	// Restored marks data loaded from before a restart; it's cleared when the
+	// hub next answers for this section.
+	Restored bool `json:"restored,omitempty"`
 }
 
 type Store struct {

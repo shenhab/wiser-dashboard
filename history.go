@@ -118,7 +118,7 @@ func (h *History) Run(ctx context.Context, store *Store) {
 
 func sampleFrom(snap map[string]Entry) (Sample, bool) {
 	room, ok := snap["Room"]
-	if !ok || room.Data == nil || time.Since(room.Fetched) > 3*time.Minute {
+	if !ok || room.Data == nil || room.Restored || time.Since(room.Fetched) > 3*time.Minute {
 		return Sample{}, false
 	}
 	var rooms []struct {

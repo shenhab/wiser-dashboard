@@ -68,7 +68,13 @@ func (s *Server) alerts() []Alert {
 	if room.Data == nil {
 		return nil // still starting up
 	}
-	if age := time.Since(room.Fetched); age > staleAfter {
+	// Data saved before a restart is as old as the downtime; until the hub
+	// answers, judge it by how long this run has gone without a reply.
+	since := room.Fetched
+	if room.Restored && startedAt.After(since) {
+		since = startedAt
+	}
+	if age := time.Since(since); age > staleAfter {
 		add("hub-offline", "critical", "The hub isn't answering",
 			fmt.Sprintf("No reply for %s. Heating keeps running on the hub's own schedule.", age.Round(time.Minute)))
 	}

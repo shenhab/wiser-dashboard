@@ -138,12 +138,17 @@ func (h *Health) check(snap map[string]Entry) {
 	now := time.Now()
 
 	// Spells when the hub stopped answering, judged by the room poll.
+	// Data saved before a restart counts from the restart, like the alerts.
 	if room := snap["Room"]; !room.Fetched.IsZero() {
-		stale := now.Sub(room.Fetched) > 3*time.Minute
+		last := room.Fetched
+		if room.Restored && startedAt.After(last) {
+			last = startedAt
+		}
+		stale := now.Sub(last) > 3*time.Minute
 		switch {
 		case stale && !h.offline:
 			h.offline = true
-			h.addEvent(HealthEvent{T: room.Fetched.Unix(), Kind: "offline", Detail: room.Error})
+			h.addEvent(HealthEvent{T: last.Unix(), Kind: "offline", Detail: room.Error})
 		case !stale && h.offline:
 			h.offline = false
 			h.addEvent(HealthEvent{T: now.Unix(), Kind: "online"})
@@ -151,7 +156,7 @@ func (h *Health) check(snap map[string]Entry) {
 	}
 
 	st := snap["status"]
-	if st.Data == nil || !st.Fetched.After(h.seen) {
+	if st.Data == nil || st.Restored || !st.Fetched.After(h.seen) {
 		return
 	}
 	h.seen = st.Fetched

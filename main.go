@@ -114,6 +114,13 @@ func main() {
 	}
 
 	hub.SetTarget(cfg.HubIP, cfg.Secret)
+	dataPath := filepath.Join(filepath.Dir(*configPath), "hub-data.json")
+	if n := store.Load(dataPath, cfg.HubIP); n > 0 {
+		log.Printf("showing saved hub data until the hub answers (%d sections)", n)
+	}
+	var saver sync.WaitGroup
+	saver.Add(1)
+	go func() { defer saver.Done(); store.RunSaver(ctx, dataPath, hub) }()
 	go poller.Run(ctx)
 	go history.Run(ctx, store)
 	go health.Run(ctx, store, hub)
@@ -137,6 +144,7 @@ func main() {
 		log.Fatal(err)
 	}
 	bg.Wait() // let the Matter bridge save its state and stop
+	saver.Wait()
 	if restarting.Load() {
 		if err := relaunch(srv.updater.exe); err != nil {
 			log.Fatalf("starting the updated program: %v (start it again by hand)", err)

@@ -497,7 +497,9 @@ func (s *Server) mcpStatus() (any, error) {
 	e := s.store.Snapshot()["Room"]
 	out["hub"] = map[string]any{
 		"data_age_seconds": int(time.Since(e.Fetched).Seconds()),
-		"fresh":            time.Since(e.Fetched) < staleAfter,
+		"fresh":            time.Since(e.Fetched) < staleAfter && !e.Restored,
+		// Saved from before the dashboard restarted; the hub hasn't answered yet.
+		"restored": e.Restored,
 	}
 	return out, nil
 }

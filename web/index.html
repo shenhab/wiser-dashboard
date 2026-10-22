@@ -325,7 +325,7 @@ const sec = n => S.state?.sections?.[n]?.data;
 const hhmm = d => d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
 // Round first, so 119.6 minutes is "2h", not "1h 60m".
 const dur = m => { m = Math.round(m); return m < 1 ? "0m" : m < 60 ? m + "m" : Math.floor(m / 60) + "h" + (m % 60 ? " " + m % 60 + "m" : ""); };
-const ago = t => { if (!t) return "never"; const s = Math.round((Date.now() - new Date(t)) / 1000); return s < 8 ? "just now" : s < 90 ? s + "s ago" : Math.round(s / 60) + "m ago"; };
+const ago = t => { if (!t) return "never"; const s = Math.round((Date.now() - new Date(t)) / 1000); return s < 8 ? "just now" : s < 90 ? s + "s ago" : s < 5400 ? Math.round(s / 60) + "m ago" : s < 172800 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago"; };
 const isHeating = r => r.PercentageDemand > 0 || r.ControlOutputState === "On";
 const chName = c => S.state?.channelNames?.[c.id] || c.Name || "Zone " + c.id;
 const zoneOf = id => (sec("HeatingChannel") || []).find(c => (c.RoomIds || []).includes(id));
@@ -402,12 +402,14 @@ function renderStatus() {
     if (e.fetched && !e.fetched.startsWith("0001")) fresh = Math.max(fresh, +new Date(e.fetched));
     if (e.error) errs++;
   }
-  const dot = !st.configured ? "err" : errs ? "busy" : fresh ? "ok" : "busy";
+  // After a restart the rooms show the data saved before it until the hub answers.
+  const restored = st.sections?.Room?.restored;
+  const dot = !st.configured ? "err" : errs || restored ? "busy" : fresh ? "ok" : "busy";
   const theme = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   $("#status").innerHTML = `
     ${st.queue > 0 ? `<span class="chip warn"><span class="spin"></span>${st.queue} sending</span>` : ""}
     <span class="dot ${dot}" title="${esc(st.hubIP || "")}"></span>
-    <span class="txt">${!st.configured ? "Not connected" : fresh ? "Updated " + ago(fresh) : "Connecting…"}</span>
+    <span class="txt" ${restored ? `title="The dashboard restarted; this is what it last knew. Controls still work."` : ""}>${!st.configured ? "Not connected" : restored ? `Showing saved data (${ago(st.sections.Room.fetched)}) · waiting for the hub` : fresh ? "Updated " + ago(fresh) : "Connecting…"}</span>
     ${st.update?.busy && st.update.busy !== "checking" ? `<span class="chip warn"><span class="spin"></span>Updating…</span>` : st.update?.available ? `<button class="chip heat" style="border:0;cursor:pointer" onclick="go('advanced','system')" title="Version ${esc(st.update.latest)} is available">Update available</button>` : ""}
     <span class="txt faint xs" title="Wiser Dashboard version">${esc(st.version || "")}</span>
     <button class="icon-btn" title="Switch theme" aria-label="Switch theme" onclick="toggleTheme()" style="width:30px;height:30px">${theme === "dark" ? ICON.sun : ICON.moon}</button>`;
