@@ -42,6 +42,7 @@ sudo install -m 755 wiser-dashboard /usr/local/bin/
 sudo install -m 640 -g wiser-dashboard ~/wiser_secret.txt /etc/wiser-dashboard.secret
 sudo install -m 644 wiser-dashboard.service /etc/systemd/system/
 sudo systemctl enable --now wiser-dashboard
+sudo ./open-firewall.sh                 # only if the machine has a firewall, see below
 journalctl -u wiser-dashboard -f        # its log
 ```
 
@@ -66,14 +67,30 @@ the dashboard. Pairing is kept across restarts; the same page lists paired apps 
 
 - Included in the release downloads for every platform except 32-bit Raspberry Pi OS (armv7); use the
   64-bit OS there.
-- It uses UDP port 5540 and mDNS (UDP 5353); allow both through a firewall. `-matter-port` changes the
-  port, `-matter=false` turns the bridge off.
+- It uses UDP port 5540 and mDNS (UDP 5353), besides the dashboard's TCP 8080. `-matter-port` changes
+  the port, `-matter=false` turns the bridge off. See [Firewall](#firewall).
 - It reads and controls the hub through the dashboard's own `/data/` API with the hub secret, like Home
   Assistant does, so it adds no load on the hub.
 - The bridge is a separate program (`matter/`, TypeScript on [matter.js](https://github.com/project-chip/matter.js),
   compiled with Bun) packed inside the dashboard, which unpacks it next to its config and supervises it.
   That's why release downloads are 30–40 MB.
 - It isn't Matter-certified, so apps warn about an uncertified device when pairing; that's expected.
+
+## Firewall
+
+The dashboard needs TCP 8080 (the dashboard and Home Assistant), UDP 5540 (Matter) and UDP 5353 (mDNS,
+how Google Home and the others find the bridge), reachable from your home network.
+
+- **Linux:** `sudo ./open-firewall.sh` (in the Linux download, and in `deploy/`). It works out your local
+  network itself, finds which firewall is in use (ufw, firewalld or nftables) and opens those ports to the
+  local network only, never to the internet. `--dry-run` shows what it would do; pass a network
+  (`sudo ./open-firewall.sh 192.168.1.0/24`) to choose it yourself. Running it again changes nothing, and
+  with no firewall active it does nothing.
+- **Windows:** on first start Windows asks whether to allow it on networks: allow **Private networks**.
+  If you missed it, Windows Security → Firewall & network protection → Allow an app through firewall.
+- **macOS:** allow the incoming-connections prompt if the firewall is on, and **Local Network** access
+  when asked (System Settings → Privacy & Security → Local Network); Matter can't find or answer
+  controllers without it.
 
 ## Home Assistant
 

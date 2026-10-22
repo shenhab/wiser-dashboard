@@ -5,6 +5,7 @@
 #   sudo install -m 640 -g wiser-dashboard ~/wiser_secret.txt /etc/wiser-dashboard.secret
 #   sudo install -m 644 wiser-dashboard.service /etc/systemd/system/
 #   sudo systemctl enable --now wiser-dashboard
+#   sudo ./open-firewall.sh        # if the machine has a firewall
 #
 # Config, history and health logs live in /var/lib/wiser-dashboard. Only root
 # and the service can read the secret. Optional settings

@@ -284,7 +284,9 @@ func packageBuild(bin, goos, goarch, version string) (string, error) {
 	}
 	files := []struct{ src, dst string }{{bin, binName}, {"README.md", "README.md"}}
 	if goos == "linux" {
-		files = append(files, struct{ src, dst string }{filepath.Join("deploy", "wiser-dashboard.service"), "wiser-dashboard.service"})
+		files = append(files,
+			struct{ src, dst string }{filepath.Join("deploy", "wiser-dashboard.service"), "wiser-dashboard.service"},
+			struct{ src, dst string }{filepath.Join("deploy", "open-firewall.sh"), "open-firewall.sh"})
 	}
 	if err := os.MkdirAll("dist", 0o755); err != nil {
 		return "", err
@@ -326,7 +328,7 @@ func packageBuild(bin, goos, goarch, version string) (string, error) {
 			return "", err
 		}
 		mode := int64(0o644)
-		if fl.dst == binName {
+		if fl.dst == binName || strings.HasSuffix(fl.dst, ".sh") {
 			mode = 0o755
 		}
 		if err := tw.WriteHeader(&tar.Header{Name: name + "/" + fl.dst, Mode: mode, Size: st.Size(), ModTime: time.Now()}); err != nil {
