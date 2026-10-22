@@ -1354,7 +1354,25 @@ automation:
 }
 // The address Home Assistant should use: this page's, unless it was opened as localhost.
 function dashURL() { return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) && S.state.lanURL ? S.state.lanURL : location.origin; }
-async function copyText(t, msg) { try { await navigator.clipboard.writeText(t); toast(msg); } catch { toast("Couldn't copy: select the text instead", true); } }
+// The clipboard API only exists on secure pages (HTTPS or localhost); the
+// dashboard is usually opened over plain HTTP on the home network, so fall
+// back to copying through a hidden text field there.
+async function copyText(t, msg) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(t); toast(msg); return; }
+  } catch {}
+  const ta = document.createElement("textarea");
+  ta.value = t;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+  document.body.append(ta);
+  ta.select();
+  ta.setSelectionRange(0, t.length); // iOS
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  ta.remove();
+  ok ? toast(msg) : toast("Couldn't copy: select the text instead", true);
+}
 async function saveAlertSettings(ch) {
   const st = S.state.settings || {}, body = {min_room_temp: st.minRoomTemp, off: {...(st.off || {})}};
   if (ch.minRoomTemp) body.min_room_temp = ch.minRoomTemp;
