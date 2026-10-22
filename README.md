@@ -67,7 +67,9 @@ dashboard, Home Assistant, Google Home and AI assistants, so none of them has to
 - **Schedules**: a visual weekly editor for heating and hot water schedules, with copy to weekdays or to all days,
   rename, and assigning schedules to rooms.
 - **Insights**: heating time per day, boiler starts and short runs, warm-up speed per room, and hub health.
-- **Devices**: every thermostat and device with signal and battery, the hub, its Zigbee radio and what it can do.
+- **Devices**: every thermostat and device with signal and battery, the hub, its Zigbee radio and what it can do,
+  and an **Add a device** wizard (beta): pairing mode, the new device found, made to blink and attached to a room
+  (a new one if needed), with the hub's acceptance checked.
 - **Advanced**:
   - **Hub settings**: comfort mode, early-start limit, away temperature, hot water while away, valve protection,
     daylight saving, and the boiler setup for reference.

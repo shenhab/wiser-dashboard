@@ -36,6 +36,7 @@ type Server struct {
 	mcpOff        bool // -mcp=false
 	updater       *Updater
 	autoUpdate    bool
+	identifyOff   map[int]*time.Timer // device -> its pending "identify off"
 	candidates    []Candidate
 	discovering   bool
 	lastScan      time.Time
@@ -63,6 +64,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /api/update/install", s.handleUpdateInstall)
 	mux.HandleFunc("POST /api/update/auto", s.handleUpdateAuto)
+	mux.HandleFunc("POST /api/devices/permit-join", s.handlePermitJoin)
+	mux.HandleFunc("POST /api/devices/identify", s.handleIdentify)
+	mux.HandleFunc("POST /api/devices/attach", s.handleAttachDevice)
+	mux.HandleFunc("GET /api/devices/unassigned", s.handleUnassigned)
+	mux.HandleFunc("POST /api/rooms", s.handleCreateRoom)
 	mux.HandleFunc("GET /api/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/setup/discover", s.handleDiscover)
 	mux.HandleFunc("POST /api/setup/fetch-secret", s.handleFetchSecret)
