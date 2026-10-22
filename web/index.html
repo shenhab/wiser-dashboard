@@ -1053,7 +1053,7 @@ function signalLine(hs) {
 function viewDevices() {
   const devs = sec("Device") || [], rs = rooms();
   const m = S.state.matter || {};
-  const nudge = m.available && m.status && !m.status.commissioned ? `<div class="card row" style="margin-top:16px;justify-content:space-between;flex-wrap:wrap;gap:10px"><div><b>Use with Google Home, Apple Home or Alexa</b><div class="faint small">Voice control and remote access for your rooms and hot water</div></div><button class="btn sm primary" onclick="go('advanced','smarthome')">Connect</button></div>` : "";
+  const nudge = m.available && m.status && !m.status.commissioned && !(m.status.fabrics || []).length ? `<div class="card row" style="margin-top:16px;justify-content:space-between;flex-wrap:wrap;gap:10px"><div><b>Use with Google Home, Apple Home or Alexa</b><div class="faint small">Voice control and remote access for your rooms and hot water</div></div><button class="btn sm primary" onclick="go('advanced','smarthome')">Connect</button></div>` : "";
   return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Devices</h1></section>${nudge}<div class="section-h"><h2>On the network</h2></div>
   <div class="grid">${devs.map(d => {
     const room = rs.find(r => r.RoomStatId === d.id);
@@ -1219,9 +1219,10 @@ function advSmartHome() {
   if (!m.available) return `<div class="section-h"><h2>Google Home, Apple Home and Alexa</h2></div><div class="card"><p class="small muted" style="margin:0">This build doesn't include the Matter bridge. The downloads on the Releases page do; a build of your own needs <span class="mono">-tags matter</span>, see the README.</p></div>`;
   if (!st) return `<div class="section-h"><h2>Google Home, Apple Home and Alexa</h2></div><div class="card"><div class="row"><span class="spin"></span><span class="small">Starting the Matter bridge…</span></div>${m.error ? `<p class="small" style="color:var(--crit)">${esc(m.error)}</p>` : ""}</div>`;
   const rs = rooms(), fabrics = st.fabrics || [];
+  const paired = st.commissioned || fabrics.length > 0; // older bridges could report a pairing as "not commissioned"
   const boost = {minutes: 30, delta: 30, off: {}, ...(m.boost || {})};
   const chips = `<div class="row" style="flex-wrap:wrap;gap:8px">
-      ${st.commissioned ? `<span class="chip good">Paired</span>` : `<span class="chip warn">Not paired yet</span>`}
+      ${paired ? `<span class="chip good">Paired</span>` : `<span class="chip warn">Not paired yet</span>`}
       ${m.running ? (st.hubReachable ? `<span class="chip good">Reading the hub</span>` : `<span class="chip warn">Waiting for hub data</span>`) : `<span class="chip crit">Bridge stopped${m.error ? ": " + esc(m.error) : ""}</span>`}
       <span class="faint xs">${st.devices} devices · UDP port ${st.port}${st.version ? " · " + esc(st.version) : ""}</span></div>`;
   const devices = `<div class="section-h"><h2>What your apps will see</h2></div><div class="card"><table class="kv">
@@ -1244,7 +1245,7 @@ function advSmartHome() {
       <div style="margin-top:6px">"Hey Google, turn on hot water"</div>
       ${rs[0] && !boost.off?.[rs[0].id] ? `<div style="margin-top:6px">"Hey Google, turn on ${esc(rs[0].Name)} heating boost"</div>` : ""}
       <p class="faint xs" style="margin:10px 0 0">Works away from home too, through your Google Nest speaker, display or TV streamer, which must stay plugged in at home. Gemini can control these the same way.</p></div>`;
-  if (!st.commissioned) {
+  if (!paired) {
     return `<div class="section-h"><h2>Connect to Google Home, Apple Home or Alexa</h2></div><div class="card">${chips}
       <div class="pair">
         <div class="pair-code">${st.qrRows?.length ? qrSvg(st.qrRows) : ""}<div class="mono" style="font-size:1.15rem;letter-spacing:.04em;margin-top:8px">${esc(manualCode(st.manualCode))}</div>
