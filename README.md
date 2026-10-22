@@ -110,27 +110,29 @@ Windows (x86-64, arm64) are on the [Releases](../../releases) page. Pick the one
 
 ## Build
 
-```sh
-go build -o wiser-dashboard .   # this machine, without the Matter bridge
-./build.sh                      # every platform into dist/
-```
-
-With the Matter bridge (needs Node.js; Bun comes with `npm ci`):
+One script builds it on Windows, macOS and Linux alike. It needs only [Go](https://go.dev/dl/); with
+[Node.js](https://nodejs.org) installed it also builds and embeds the Matter bridge (it installs the
+bridge's dependencies itself).
 
 ```sh
-(cd matter && npm ci && npm run build)
-mkdir -p matterbin && cp matter/dist/wiser-matter matterbin/   # wiser-matter.exe on Windows
-go build -tags matter -o wiser-dashboard .
+go run ./tools/build                       # this machine -> ./wiser-dashboard (.exe on Windows)
+go run ./tools/build -all                  # every platform -> dist/
+go run ./tools/build -target linux/arm64   # chosen platforms (comma-separated) -> dist/
+go run ./tools/build -all -package         # release archives (.tar.gz / .zip) -> dist/
+go run ./tools/build -matter=off           # without the Matter bridge (-matter=on: fail without Node.js)
 ```
 
-After `npm ci`, `./build.sh` embeds the bridge in every platform's build too. The bridge's tests pair a
-real Matter controller with it against a mock hub: `node test/e2e.mjs dist/wiser-matter` (the bridge
-alone) and `node test/system.mjs ../wiser-dashboard` (the whole app), both run from `matter/`.
+`./build.sh` (macOS, Linux) and `build.cmd` (Windows) are shortcuts for the same, e.g. `./build.sh -all`.
+Plain `go build -o wiser-dashboard .` also works and gives a build without the Matter bridge.
+
+The bridge's tests pair a real Matter controller with it against a mock hub. From `matter/`, after a
+build: `node test/e2e.mjs dist/wiser-matter-<os>-<arch>` (the bridge alone) and
+`node test/system.mjs ../wiser-dashboard` (the whole app).
 
 GitHub Actions (`.github/workflows/ci.yml`) checks every push and pull request on Linux, macOS and
 Windows (gofmt, vet, tests, a native build) and pairs a Matter controller with the bridge on each, then
-cross-builds all platforms with the bridge embedded; the archives are kept as
-workflow artifacts. To publish a release, push a version tag:
+builds and packages every platform with the same build script; the archives are kept as workflow
+artifacts. To publish a release, push a version tag:
 
 ```sh
 git tag v1.0.0 && git push origin v1.0.0   # a tag with a dash, like v1.1.0-rc1, is marked pre-release

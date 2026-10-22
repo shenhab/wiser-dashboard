@@ -51,8 +51,9 @@ jobs:
           go build -o wiser-dashboard-smoke .
           ./wiser-dashboard-smoke -version
 
-  # The Matter bridge (matter/) paired with a real Matter controller on each OS:
-  # pairing over mDNS, every command, restarts. A mock stands in for the hub.
+  # The Matter bridge paired with a real Matter controller on each OS: pairing
+  # over mDNS, every command, restarts; a mock stands in for the hub. The app
+  # is built with tools/build, the same script as the releases and README.
   matter-test:
     name: Matter test (${{ matrix.os }})
     strategy:
@@ -67,7 +68,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: matter
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -79,66 +79,28 @@ jobs:
         with:
           go-version: stable
           cache: false
-      - run: npm ci
+      - name: Build with the build script
+        run: go run ./tools/build -matter=on
       - run: npm run typecheck
-      - name: Build the bridge
-        run: npx bun build --compile src/main.ts --outfile dist/wiser-matter
+        working-directory: matter
       - name: Bridge test
-        run: node test/e2e.mjs dist/wiser-matter$([ "$RUNNER_OS" = Windows ] && echo .exe)
+        working-directory: matter
+        run: |
+          exe=$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
+          node test/e2e.mjs "dist/wiser-matter-$(go env GOOS)-$(go env GOARCH)$exe"
       # The whole app: needs SIGTERM for a clean stop, so not on Windows.
       - name: Whole-system test
         if: runner.os != 'Windows'
-        run: |
-          mkdir -p ../matterbin && cp dist/wiser-matter ../matterbin/wiser-matter
-          (cd .. && go build -tags matter -o wiser-dashboard .)
-          node test/system.mjs ../wiser-dashboard
-
-  # Cross-compiles the bridge for every platform that gets it embedded.
-  matter-build:
-    name: Build Matter bridge
-    needs: matter-test
-    runs-on: ubuntu-latest
-    defaults:
-      run:
         working-directory: matter
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: matter/package-lock.json
-      - run: npm ci
-      - name: Build
-        run: |
-          # "baseline" x64 builds also run on older CPUs (mini PCs, NAS boxes).
-          for t in linux-amd64:linux-x64-baseline linux-arm64:linux-arm64 \
-                   darwin-amd64:darwin-x64-baseline darwin-arm64:darwin-arm64 \
-                   windows-amd64:windows-x64-baseline windows-arm64:windows-arm64; do
-            npx bun build --compile --target="bun-${t#*:}" src/main.ts --outfile "out/${t%%:*}"
-          done
-          ls -la out
-      - uses: actions/upload-artifact@v7
-        with:
-          name: matter-bridges
-          path: matter/out/* # Bun adds .exe for Windows targets
-          if-no-files-found: error
-          retention-days: 3
+        run: node test/system.mjs ../wiser-dashboard
 
   build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: [check, matter-build]
+    name: Build ${{ matrix.target }}
+    needs: [check, matter-test]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
-          - { goos: linux, goarch: arm, goarm: "7" }
-          - { goos: darwin, goarch: amd64 }
-          - { goos: darwin, goarch: arm64 }
-          - { goos: windows, goarch: amd64 }
-          - { goos: windows, goarch: arm64 }
+        target: [linux/amd64, linux/arm64, linux/arm, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -147,49 +109,22 @@ jobs:
         with:
           go-version: stable
           cache: false
-      - uses: actions/download-artifact@v8
+      - uses: actions/setup-node@v7
         with:
-          name: matter-bridges
-          path: bridges
-      - name: Build
-        env:
-          CGO_ENABLED: "0"
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          GOARM: ${{ matrix.goarm }}
+          node-version: 22
+          cache: npm
+          cache-dependency-path: matter/package-lock.json
+      # Embeds the Matter bridge where Bun supports the platform (not 32-bit ARM).
+      - name: Build and package
         run: |
-          version=$(git describe --tags --always --dirty)
-          name="wiser-dashboard-$version-$GOOS-$GOARCH"
-          [ "$GOARCH" = arm ] && name="${name}v$GOARM"
-          bin=wiser-dashboard
-          [ "$GOOS" = windows ] && bin=wiser-dashboard.exe
-
-          # Embed the Matter bridge where Bun supports the platform (not 32-bit ARM).
-          tags=""
-          bridge="bridges/$GOOS-$GOARCH"
-          [ "$GOOS" = windows ] && bridge="$bridge.exe"
-          if [ -f "$bridge" ]; then
-            mkdir -p matterbin && cp "$bridge" matterbin/wiser-matter
-            tags="-tags=matter"
-          else
-            echo "::notice::$GOOS/$GOARCH is built without the Matter bridge"
-          fi
-
-          mkdir -p "pkg/$name" dist
-          go build $tags -trimpath -ldflags="-s -w -X main.version=$version" -o "pkg/$name/$bin" .
-          cp README.md "pkg/$name/"
-          [ "$GOOS" = linux ] && cp deploy/wiser-dashboard.service "pkg/$name/"
-          cd pkg
-          if [ "$GOOS" = windows ]; then
-            zip -qr "../dist/$name.zip" "$name"
-          else
-            tar -czf "../dist/$name.tar.gz" "$name"
-          fi
-          echo "NAME=$name" >> "$GITHUB_ENV"
+          go run ./tools/build -target "${{ matrix.target }}" -matter=on -package
+          echo "NAME=$(cd dist && ls *.tar.gz *.zip 2>/dev/null | head -1)" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.NAME }}
-          path: dist/*
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           if-no-files-found: error
 
   release:
