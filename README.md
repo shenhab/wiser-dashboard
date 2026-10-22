@@ -58,7 +58,9 @@ To upgrade, install the new binary over `/usr/local/bin/wiser-dashboard` and `su
 
 The dashboard has a built-in Matter bridge, so the heating shows up in Google Home, Apple Home, Alexa and
 SmartThings without Home Assistant: each room as a thermostat (temperature, target, heat/off), the hot
-water as a switch (on = 30-minute boost, off = off). Voice control, routines and Gemini work with it, and so
+water as a switch (on = 30-minute boost, off = off), and a "heating boost" switch per room (on = the
+room's temperature + 3° for 30 minutes, off = back to the schedule; length, increase and which rooms are
+set on the Google Home page). Voice control, routines and Gemini work with it, and so
 does control away from home through your Google Nest speaker or display, Apple home hub or Echo.
 
 Open **Advanced → Google Home** and scan the QR code in your app (Google Home: **+ → Device → New device →
