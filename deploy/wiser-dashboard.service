@@ -56,6 +56,9 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# Go raises its own open-files limit at startup; some builds use setrlimit,
+# which @resources covers (seen on Debian 12 / x86-64).
+SystemCallFilter=setrlimit
 
 [Install]
 WantedBy=multi-user.target
