@@ -108,6 +108,17 @@ if (!first) {
 }
 check("bridge starts unpaired", first.commissioned === false);
 
+// Without mDNS (macOS CI runners can't grant Local Network permission) a
+// controller can't pair, so stop after checking that the bridge runs.
+if (process.env.MATTER_TEST_STARTUP_ONLY) {
+    const code = await stopBridge(bridge);
+    check("bridge exits when the dashboard goes away", code === 0, `exit ${code}`);
+    mock.close();
+    rmSync(storage, { recursive: true, force: true });
+    console.log(failures ? `\n${failures} FAILED` : "\nALL PASSED (startup only)");
+    process.exit(failures ? 1 : 0);
+}
+
 // ---------------------------------------------------------------- the controller
 const env = Environment.default;
 env.vars.set("storage.path", join(storage, "controller"));
@@ -127,12 +138,10 @@ const nodeId = await controller.commissionNode({
     discovery: {
         identifierData: longDiscriminator !== undefined ? { longDiscriminator } : { shortDiscriminator },
         discoveryCapabilities: { onIpNetwork: true },
-        // CI on macOS: no Local Network permission, so no mDNS; go straight to the address.
-        knownAddress: process.env.MATTER_TEST_KNOWN_ADDRESS ? { ip: "127.0.0.1", port: MATTER_PORT, type: "udp" } : undefined,
     },
     passcode,
 });
-check(`controller pairs with the bridge (${process.env.MATTER_TEST_KNOWN_ADDRESS ? "by address" : "found over mDNS"})`, !!nodeId);
+check("controller pairs with the bridge (found over mDNS)", !!nodeId);
 
 const node = await controller.getNode(nodeId);
 node.connect();

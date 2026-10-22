@@ -103,6 +103,16 @@ if (!ready) {
     process.exit(1);
 }
 
+// Without mDNS (macOS CI runners) a controller can't pair; stop here.
+if (process.env.MATTER_TEST_STARTUP_ONLY) {
+    const exit = await stopApp(app);
+    check("dashboard stops cleanly with the bridge", exit === 0, `exit ${exit}`);
+    mock.close();
+    rmSync(dir, { recursive: true, force: true });
+    console.log(failures ? `\n${failures} FAILED` : "\nALL PASSED (startup only)");
+    process.exit(failures ? 1 : 0);
+}
+
 // ---------------------------------------------------------------- pair and control
 const env = Environment.default;
 env.vars.set("storage.path", join(dir, "controller"));
@@ -118,8 +128,6 @@ const nodeId = await controller.commissionNode({
     discovery: {
         identifierData: code.longDiscriminator !== undefined ? { longDiscriminator: code.longDiscriminator } : { shortDiscriminator: code.shortDiscriminator },
         discoveryCapabilities: { onIpNetwork: true },
-        // CI on macOS: no Local Network permission, so no mDNS; go straight to the address.
-        knownAddress: process.env.MATTER_TEST_KNOWN_ADDRESS ? { ip: "127.0.0.1", port: 5561, type: "udp" } : undefined,
     },
     passcode: code.passcode,
 });

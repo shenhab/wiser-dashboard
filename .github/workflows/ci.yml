@@ -61,9 +61,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
-      # macOS runners can't grant Local Network permission, which mDNS needs:
-      # there the controller dials the bridge's address instead of discovering it.
-      MATTER_TEST_KNOWN_ADDRESS: ${{ matrix.os == 'macos-latest' && '1' || '' }}
+      # macOS runners can't grant Local Network permission, which mDNS needs, so
+      # no controller can pair there: check that everything starts and stops.
+      MATTER_TEST_STARTUP_ONLY: ${{ matrix.os == 'macos-latest' && '1' || '' }}
     defaults:
       run:
         shell: bash
