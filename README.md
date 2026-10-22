@@ -9,7 +9,7 @@ hub itself never keeps, explains how your heating behaves, and makes the hub ava
 assistants you already use. It talks to the hub locally: no cloud account, no subscription, nothing leaves your
 home.
 
-> Download, double-click, open `http://localhost:8080`. It finds your hub by itself.
+> One command installs it, then open `http://localhost:8080`. It finds your hub by itself.
 
 ![The dashboard's home page: three rooms with their temperatures and targets, quick actions, and today's heating time and boiler starts](docs/screenshots/home.jpg)
 
@@ -167,6 +167,32 @@ turns the MCP server off.
 ---
 
 ## Get started
+
+**One command** installs the latest release, checks the download's checksum, sets it up to start
+automatically and confirms it's running:
+
+```sh
+# Linux, macOS, Raspberry Pi
+curl -fsSL https://raw.githubusercontent.com/shenhab/wiser-dashboard/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/shenhab/wiser-dashboard/main/install.ps1 | iex
+```
+
+- **Linux with systemd** gets the locked-down system service (it asks for your password via `sudo`) and its
+  firewall opened to your local network only. A copy you ran by hand before is carried over: settings,
+  history and Google Home pairing.
+- **macOS** gets a login item for your user; **Windows** starts minimized at login and, when run as
+  administrator, is allowed through the firewall on private networks. Other systems get a per-user install.
+- **Run it again to upgrade**; settings, history, pairings and tokens are kept. Options go after
+  `sh -s --`: `--version v1.3.1`, `--hub 192.168.1.50`, `--port 9090`, `--no-service`, `--no-firewall`,
+  `--uninstall` (add `--purge` to delete settings too). The hub secret can be given as `WISER_SECRET=...`;
+  otherwise the dashboard asks for it. On Windows, set `$env:WISER_VERSION`, `$env:WISER_HUB`,
+  `$env:WISER_PORT`, `$env:WISER_SECRET` or `$env:WISER_UNINSTALL = "1"` first.
+
+Prefer to do it by hand?
 
 1. **Download** the archive for your system from the [Releases](../../releases) page and unpack it.
    Linux: match `uname -m` (`x86_64` → amd64, `aarch64` → arm64, `armv7l` → armv7).

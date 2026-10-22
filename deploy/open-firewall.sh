@@ -120,7 +120,9 @@ if command -v nft >/dev/null && nft list chain inet filter input >/dev/null 2>&1
 		echo "The rules are already there. Done."
 		exit 0
 	fi
+	# shellcheck disable=SC2086 # unquoted on purpose: collapses the spaces
 	set4=$(echo $nets | sed 's/ /, /g')
+	# shellcheck disable=SC2086
 	set6=$(echo $V6_LOCAL | sed 's/ /, /g')
 	run nft insert rule inet filter input ip saddr "{ $set4 }" tcp dport "$PORT" accept comment "\"$TAG\""
 	run nft insert rule inet filter input ip saddr "{ $set4 }" udp dport "{ 5353, $MATTER_PORT }" accept comment "\"$TAG\""
