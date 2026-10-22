@@ -1,99 +1,135 @@
-# wiser-dashboard
+# Wiser Dashboard
 
-A single-binary web dashboard for a Wiser heating hub, using the hub's local REST API. No cloud, no dependencies.
+**Your Wiser heating, under your control: local, fast, and connected to Google Home, Apple Home, Alexa,
+Home Assistant and AI assistants.**
 
-## Run
+Wiser Dashboard is a single program that sits next to your Drayton / Schneider Electric **Wiser heating hub**
+on your home network. It gives you a modern dashboard for your rooms, boiler and hot water, keeps a history the
+hub itself never keeps, explains how your heating behaves, and makes the hub available to the apps and
+assistants you already use. It talks to the hub locally: no cloud account, no subscription, nothing leaves your
+home.
 
-```sh
-./wiser-dashboard                       # finds the hub, then asks for anything missing in the browser
-./wiser-dashboard -hub 192.168.1.50 -secret-file ~/wiser_secret.txt
-```
+> Download, double-click, open `http://localhost:8080`. It finds your hub by itself.
 
-Open `http://<this-machine>:8080`. Settings are saved to the path printed as `-config`
-(default: your OS config dir, `wiser-dashboard/config.json`, mode 0600).
+---
 
-| Flag | Meaning |
+## Why
+
+The Wiser hub is a capable thermostat with a fragile network side. It answers **one request at a time**, about
+**five seconds apart**, stalls on any response larger than ~2.7 KB, and on a weak Wi-Fi link drops most of its
+traffic. The official app depends on the cloud, and Home Assistant's Wiser integration reads the hub's whole state
+in one large request, which is exactly what a struggling hub can't deliver.
+
+Wiser Dashboard is built around those limits. It talks to the hub the way the hub can cope with (small requests,
+one at a time, commands ahead of polling), keeps a fresh copy of everything, and serves that copy instantly to the
+dashboard, Home Assistant, Google Home and AI assistants, so none of them has to fight the hub directly.
+
+## Highlights
+
+| | |
 |---|---|
-| `-listen :8080` | address to serve on |
-| `-hub IP` | hub address (skips discovery) |
-| `-secret` / `-secret-file` | hub secret |
-| `-password` | require a password for the dashboard (basic auth, any username); also `WISER_DASHBOARD_PASSWORD` |
-| `-no-discover` | don't scan the network at startup |
-| `-config PATH` | where to save hub IP and secret |
+| 🏠 **A dashboard you'll use** | Every room at a glance, one-tap boosts and scenes, a schedule editor, insights and every hub setting, on your phone or computer. |
+| 📈 **History and insights** | 14 days of temperatures, heating time per day, **boiler starts and short cycling**, how fast each room warms up, and "ready at" estimates. |
+| 🚨 **Alerts** | Hub offline, low batteries, weak signal, cold rooms, open windows, hub restarts, Wi-Fi trouble, wrong clock, and more, with phone notifications through Home Assistant. |
+| 🩺 **Hub health** | The hub's Wi-Fi signal, retransmissions, drops and restarts, logged over time, so you can see when the problem is the network, not the heating. |
+| 🔌 **Home Assistant, made reliable** | A drop-in, hub-compatible API that answers Home Assistant from the cache instantly, even when the hub's Wi-Fi is poor. |
+| 🗣️ **Google Home, Apple Home, Alexa** | A built-in **Matter bridge**: rooms appear as thermostats, hot water and per-room **heating boost** switches as switches. Voice control, routines, Gemini, and control away from home, without Home Assistant. |
+| 🤖 **Talk to your heating** | A built-in **MCP server**, so Claude and other AI assistants can answer *"why was upstairs cold this morning?"* or *"boost the ground floor for an hour"*. |
+| 📦 **One file, everywhere** | Windows, macOS, Linux and Raspberry Pi. No installer, no dependencies. Optional hardened Linux service and a firewall helper. |
+| 🔒 **Private by design** | Everything stays on your network. Separate secrets for each kind of access, an optional dashboard password, and no cloud. |
 
-History (one sample a minute, kept 14 days) is recorded to `history.jsonl` next to the config file;
-the hub itself keeps none. From it the dashboard works out boiler starts and run lengths, and how fast
-each room warms up (for the "ready ≈" times). `health.jsonl` logs the hub's own restarts, Wi-Fi drops and
-outages. Zone labels and alert settings set in the dashboard are stored in the config too.
+---
 
-`GET /api/alerts` returns the current alerts (`count` of warnings and critical ones, a `summary` line and
-the full list); the Alerts page has a ready-made Home Assistant REST sensor and notification automation.
+## Features
 
-**Anyone who can open the dashboard can control the heating.** Use `-password` if your network isn't trusted.
+### The dashboard
 
-## Run as a service (Linux)
+- **Home**: a plain-language summary ("Heating Upper Floor to 21°"), boiler and hot water state, heating time and
+  boiler starts today, alerts, and **quick actions**: *Warm up* (all rooms 21° for an hour), *Back to schedule*,
+  *Heating off*, *Leaving home* and *I'm home* (away mode).
+- **Rooms**: temperature, target, whether it's heating, what set the target (schedule, boost, override, away) and
+  until when, **"ready ≈"** times from the room's measured warm-up speed, one-tap boost, set-and-hold for 1 or 3
+  hours, and a detail sheet with the room's history chart and *how the hub runs this room*.
+- **Hot water**: on, off, boost, schedule, auto or manual mode.
+- **Schedules**: a visual weekly editor for heating and hot water schedules, with copy to weekdays or to all days,
+  rename, and assigning schedules to rooms.
+- **Insights**: heating time per day, boiler starts and short runs, warm-up speed per room, and hub health.
+- **Devices**: every thermostat and device with signal and battery, the hub, its Zigbee radio and what it can do.
+- **Advanced**:
+  - **Hub settings**: comfort mode, early-start limit, away temperature, hot water while away, valve protection,
+    daylight saving, and the boiler setup for reference.
+  - **Google Home**: Matter pairing and boost switch settings.
+  - **AI assistants**: MCP setup.
+  - **Alerts**: alert settings, with a ready-made Home Assistant setup.
+  - **System**, and **Network**: Wi-Fi trouble counters, networks the hub can see, router and setup network details.
+  - **Explorer & console**: read and send anything the hub's API offers.
+- Works on phones, has light and dark themes, and lets you give heating zones your own names.
 
-`deploy/wiser-dashboard.service` (also in the Linux release archives) runs it under systemd as its own
-locked-down user, starts it at boot and restarts it if it stops. From the unpacked archive:
+### History, insights and alerts
 
-```sh
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin wiser-dashboard
-sudo install -m 755 wiser-dashboard /usr/local/bin/
-sudo install -m 640 -g wiser-dashboard ~/wiser_secret.txt /etc/wiser-dashboard.secret
-sudo install -m 644 wiser-dashboard.service /etc/systemd/system/
-sudo systemctl enable --now wiser-dashboard
-sudo ./open-firewall.sh                 # only if the machine has a firewall, see below
-journalctl -u wiser-dashboard -f        # its log
-```
+The hub keeps no history, so the dashboard records one sample a minute and keeps 14 days. From it, it works out:
 
-It finds the hub by itself; add `-hub IP` to `ExecStart` (then `sudo systemctl daemon-reload`) to skip
-the scan. Config, history and health logs are kept in `/var/lib/wiser-dashboard`. To keep history from an
-earlier install, stop the service, copy `history.jsonl` and `health.jsonl` there, run
-`sudo chown wiser-dashboard: /var/lib/wiser-dashboard/*`, and start it again. A dashboard password goes in
-`/etc/wiser-dashboard.env` as `WISER_DASHBOARD_PASSWORD=...`.
+- **Boiler starts and short cycling** per day. Frequent short runs wear a boiler; this shows them.
+- **Heating and hot water time** per day and per zone.
+- **Warm-up speed** of each room (°C per hour), used for the "ready ≈" estimates.
 
-To upgrade, install the new binary over `/usr/local/bin/wiser-dashboard` and `sudo systemctl restart wiser-dashboard`.
+**Alerts** watch for: the hub going offline, low batteries, weak signal, rooms below a minimum temperature, open
+windows, hub restarts, Wi-Fi trouble, a wrong hub clock, changes stuck waiting for a device, away mode left on,
+and schedules that never heat. Each kind can be turned off, the minimum temperature is yours to set, and
+`GET /api/alerts` with the ready-made Home Assistant sensor sends them to your phone.
 
-## Google Home, Apple Home and Alexa (Matter)
+**Hub health** logs the hub's Wi-Fi signal, TCP retransmissions, disconnects, failed reconnects, memory and
+restarts, so a flaky hub can be diagnosed with evidence.
 
-The dashboard has a built-in Matter bridge, so the heating shows up in Google Home, Apple Home, Alexa and
-SmartThings without Home Assistant: each room as a thermostat (temperature, target, heat/off), the hot
-water as a switch (on = 30-minute boost, off = off), and a "heating boost" switch per room (on = the
-room's temperature + 3° for 30 minutes, off = back to the schedule; length, increase and which rooms are
-set on the Google Home page). Voice control, routines and Gemini work with it, and so
-does control away from home through your Google Nest speaker or display, Apple home hub or Echo.
+### Home Assistant, made reliable
 
-Open **Advanced → Google Home** and scan the QR code in your app (Google Home: **+ → Device → New device →
-Matter-enabled device**). Your phone and the app's hub (e.g. a Nest speaker) must be on the same network as
-the dashboard. Pairing is kept across restarts; the same page lists paired apps and can remove them.
+The dashboard serves the hub's own API under `/data/` on its port. Point Home Assistant's Wiser integration at the
+dashboard instead of the hub:
 
-- Included in the release downloads for every platform except 32-bit Raspberry Pi OS (armv7); use the
-  64-bit OS there.
-- It uses UDP port 5540 and mDNS (UDP 5353), besides the dashboard's TCP 8080. `-matter-port` changes
-  the port, `-matter=false` turns the bridge off. See [Firewall](#firewall).
-- It reads and controls the hub through the dashboard's own `/data/` API with the hub secret, like Home
-  Assistant does, so it adds no load on the hub.
-- The bridge is a separate program (`matter/`, TypeScript on [matter.js](https://github.com/project-chip/matter.js),
-  compiled with Bun) packed inside the dashboard, which unpacks it next to its config and supervises it.
-  That's why release downloads are 30–40 MB.
-- It isn't Matter-certified, so apps warn about an uncertified device when pairing; that's expected.
+- Full-state reads (domain, network, schedules, status, OpenTherm) are answered **instantly from the cache**.
+- Commands go to the hub **ahead of polling**, and the cache updates from the hub's reply, so the next read shows
+  the change.
+- It accepts the **hub's own secret**, always the one the dashboard uses, and nothing else.
 
-## AI assistants (MCP)
+In Home Assistant, add the Wiser integration manually: **Host** = this machine's IP, **Port** = `8080`,
+**Secret** = the hub secret. Ignore the hub if Home Assistant discovers it directly. The dashboard password
+doesn't apply to `/data/`.
 
-The dashboard is also an [MCP](https://modelcontextprotocol.io) server, so Claude and other AI assistants
-can read and control the heating: *"why was upstairs cold this morning?"*, *"how often did the boiler start
-today?"*, *"boost the ground floor for an hour"*.
+### Google Home, Apple Home, Alexa and SmartThings (Matter)
 
-- **Read:** `get_status`, `get_history`, `get_boiler_cycles`, `get_warmup_rates`, `get_alerts`,
+A built-in Matter bridge puts your heating into the smart-home apps directly, **without Home Assistant**:
+
+| In your app | What it does |
+|---|---|
+| **Each room**, as a thermostat | Temperature, target and heat/off. A new target holds until the schedule's next change. |
+| **Hot water**, as a switch | On boosts it for 30 minutes; off turns it off until the schedule's next change. Shows whether it's actually heating. |
+| **"<Room> heating boost"**, as a switch per room | On raises the room to **its current temperature + 3°** (never below its target) for **30 minutes**; off returns it to the schedule. Shows on while the hub is boosting, however the boost was started. Length, increase and which rooms get one are set on the Google Home page. |
+
+- **Voice and Gemini**: *"Hey Google, set Ground Floor to 21"*, *"turn on Upper Floor heating boost"*. For a phrase
+  of your own, like *"boost ground floor heater"*, the dashboard explains the one-time Google Home routine.
+- **Away from home** through your Google Nest speaker or display, Apple home hub or Echo.
+- **Pairing**: scan the QR code under **Advanced → Google Home** (Google Home: **+ → Device → New device →
+  Matter-enabled device**). Pairing survives restarts and upgrades; the same page lists paired apps and can
+  remove them.
+- **No extra load on the hub**: the bridge works from the dashboard's cache and queue, with the hub secret.
+- Ports: UDP 5540 and mDNS (UDP 5353). `-matter-port` changes the port, `-matter=false` turns it off.
+- The bridge (`matter/`, TypeScript on [matter.js](https://github.com/project-chip/matter.js), compiled with Bun)
+  is packed inside the dashboard, which unpacks and supervises it. That's why downloads are 30–40 MB.
+
+### AI assistants (MCP)
+
+The dashboard is an [MCP](https://modelcontextprotocol.io) server at `http://<this-machine>:8080/mcp`, so
+Claude and other AI assistants can read and control the heating with real data:
+
+- **Read**: `get_status`, `get_history` (up to 14 days), `get_boiler_cycles`, `get_warmup_rates`, `get_alerts`,
   `get_hub_health`, `get_schedules`.
-- **Control:** `set_room_temperature`, `boost_room`, `room_off`, `resume_schedule`, `hot_water`,
-  `set_away_mode`. Changes are overrides (for some minutes or until the schedule's next change) within
-  5–30°, sent through the same queue as the dashboard, so the dashboard, Home Assistant and Google Home all
-  see them. Control tools are marked as such, so assistants ask before using them.
-
-It's at `http://<this-machine>:8080/mcp` (MCP's streamable HTTP transport) and needs its own token, made on
-first start and shown with ready-made setup under **Advanced → AI assistants**, where it can also be
-replaced. It's separate from the hub secret.
+- **Control**: `set_room_temperature`, `boost_room`, `room_off`, `resume_schedule`, `hot_water` (boost, on, off,
+  schedule), `set_away_mode`.
+- **Safe by default**: changes are overrides (for some minutes or until the schedule's next change) within 5–30°,
+  bad input is refused before it reaches the hub, and control tools are marked as such, so assistants ask first.
+  Every change goes through the same queue as the dashboard, so all apps stay in sync.
+- **Its own token**, separate from the hub secret, made on first start and shown, copyable and replaceable
+  under **Advanced → AI assistants**, with ready-made setup:
 
 ```sh
 # Claude Code
@@ -101,63 +137,98 @@ claude mcp add --transport http wiser http://<this-machine>:8080/mcp --header "A
 ```
 
 Apps that only start local MCP servers (like Claude Desktop) run the same program as a relay:
-`wiser-dashboard mcp -url http://<this-machine>:8080/mcp` with the token in `WISER_MCP_TOKEN`. `-mcp=false`
+`wiser-dashboard mcp -url http://<this-machine>:8080/mcp`, with the token in `WISER_MCP_TOKEN`. `-mcp=false`
 turns the MCP server off.
 
-## Firewall
+### Easy to run, built properly
 
-The dashboard needs TCP 8080 (the dashboard and Home Assistant), UDP 5540 (Matter) and UDP 5353 (mDNS,
-how Google Home and the others find the bridge), reachable from your home network.
+- **One file** for Windows, macOS, Linux (x86-64, arm64) and Raspberry Pi. No installer, no runtime.
+- **Finds the hub by itself** and asks for anything missing in the browser.
+- **Linux service**: a hardened systemd unit (its own user, no access to your home folder, a restricted set of
+  system calls) and **`open-firewall.sh`**, which works out your network and opens only what's needed, only to it.
+- **Tested on every change**: GitHub Actions checks Linux, macOS and Windows, pairs a **real Matter controller**
+  with the bridge against a mock hub, runs the MCP tests, and builds and packages every platform. Releases come
+  with SHA-256 checksums.
+- **One build script** (`go run ./tools/build`) that works identically on every system.
 
-- **Linux:** `sudo ./open-firewall.sh` (in the Linux download, and in `deploy/`). It works out your local
-  network itself, finds which firewall is in use (ufw, firewalld or nftables) and opens those ports to the
-  local network only, never to the internet. `--dry-run` shows what it would do; pass a network
-  (`sudo ./open-firewall.sh 192.168.1.0/24`) to choose it yourself. Running it again changes nothing, and
-  with no firewall active it does nothing.
-- **Windows:** on first start Windows asks whether to allow it on networks: allow **Private networks**.
-  If you missed it, Windows Security → Firewall & network protection → Allow an app through firewall.
-- **macOS:** allow the incoming-connections prompt if the firewall is on, and **Local Network** access
-  when asked (System Settings → Privacy & Security → Local Network); Matter can't find or answer
-  controllers without it.
+---
 
-## Home Assistant
+## Get started
 
-The Wiser integration reads the hub's whole state in one request (`/data/v2/domain/`), which hubs with a bad
-Wi-Fi link can't deliver. The dashboard serves the same API under `/data/` on its own port:
+1. **Download** the archive for your system from the [Releases](../../releases) page and unpack it.
+   Linux: match `uname -m` (`x86_64` → amd64, `aarch64` → arm64, `armv7l` → armv7).
+2. **Run** `wiser-dashboard` (`wiser-dashboard.exe` on Windows).
+3. **Open** `http://localhost:8080`, or the address it prints, from any device on your network.
 
-- full-state reads (domain, network, schedules, status, OpenTherm) come from the dashboard's cache, instantly;
-- everything else, including all commands, is forwarded to the hub ahead of polling, and the cache updates
-  from the hub's reply so the next read shows the change.
+It finds your hub and asks for the hub **secret** if it can't fetch it (see
+[How it finds the hub](#how-it-finds-the-hub-and-secret)). Settings are saved to your system's config folder
+(`wiser-dashboard/config.json`, readable only by you). `./wiser-dashboard -version` shows the version.
 
-It accepts the hub's own secret, always the one the dashboard is using, and nothing else.
-In Home Assistant, add the Wiser integration manually: **Host** = this machine's IP, **Port** = `8080`
-(or your `-listen` port), **Secret** = the hub secret. Ignore the hub if HA discovers it directly.
-The dashboard password (`-password`) doesn't apply to `/data/`.
+| Flag | Meaning |
+|---|---|
+| `-listen :8080` | Address to serve on |
+| `-hub IP` | Hub address (skips discovery) |
+| `-secret` / `-secret-file` | Hub secret |
+| `-password` | Require a password for the dashboard (any username); also `WISER_DASHBOARD_PASSWORD` |
+| `-no-discover` | Don't scan the network at startup |
+| `-config PATH` | Where to keep settings, history and logs |
+| `-matter=false`, `-matter-port` | Turn off the Matter bridge / change its UDP port (5540) |
+| `-mcp=false` | Turn off the MCP server |
 
-## How it finds the hub and secret
+**Anyone who can open the dashboard can control the heating.** Use `-password` if your network isn't trusted.
 
-- **Hub:** scans each local /24 for port 80 answering `401 {"Error":"Unauthorized"}` (the hub doesn't advertise over mDNS), then confirms with the secret.
-- **Secret:** tries `GET /secret`. Wiser hubs only serve it in setup mode, from their own Wi-Fi at `192.168.8.1`.
-  Otherwise paste it on the setup page.
+### Run as a service (Linux)
 
-## Hub quirks it works around
+`deploy/wiser-dashboard.service` (also in the Linux downloads) runs it at boot as its own locked-down user and
+restarts it if it stops. From the unpacked archive:
 
-- One connection at a time, ~5 s apart: every request goes through one queue, commands ahead of polling.
-- Responses over ~2.7 KB stall (the hub retransmits most TCP segments), so `/data/domain/` is never fetched whole;
-  sections are polled individually.
+```sh
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin wiser-dashboard
+sudo install -m 755 wiser-dashboard /usr/local/bin/
+sudo install -m 640 -g wiser-dashboard ~/wiser_secret.txt /etc/wiser-dashboard.secret
+sudo install -m 644 wiser-dashboard.service /etc/systemd/system/
+sudo systemctl enable --now wiser-dashboard
+sudo ./open-firewall.sh                 # only if the machine has a firewall
+journalctl -u wiser-dashboard -f        # its log
+```
 
-## Download
+Config, history, logs and Matter pairing live in `/var/lib/wiser-dashboard`. To keep them from an earlier
+install, stop the service, copy the old config folder's contents there, run
+`sudo chown -R wiser-dashboard: /var/lib/wiser-dashboard`, and start it again. A dashboard password goes in
+`/etc/wiser-dashboard.env` as `WISER_DASHBOARD_PASSWORD=...`. To upgrade, install the new binary over
+`/usr/local/bin/wiser-dashboard` and `sudo systemctl restart wiser-dashboard`; pairings and settings stay.
 
-Ready-made builds for Linux (x86-64, arm64, Raspberry Pi armv7), macOS (Intel, Apple silicon) and
-Windows (x86-64, arm64) are on the [Releases](../../releases) page. Pick the one matching `uname -m`
-(`x86_64` → amd64, `aarch64` → arm64, `armv7l` → armv7), unpack it and run `./wiser-dashboard`.
-`./wiser-dashboard -version` shows which build you have.
+### Firewall
 
-## Build
+It needs TCP 8080 (dashboard, Home Assistant, MCP), UDP 5540 (Matter) and UDP 5353 (mDNS) from your home network.
 
-One script builds it on Windows, macOS and Linux alike. It needs only [Go](https://go.dev/dl/); with
-[Node.js](https://nodejs.org) installed it also builds and embeds the Matter bridge (it installs the
-bridge's dependencies itself).
+- **Linux:** `sudo ./open-firewall.sh` works out your local network, finds the firewall in use (ufw, firewalld or
+  nftables) and opens those ports to the local network only. `--dry-run` shows what it would do; pass a network
+  (`192.168.1.0/24`) to choose it yourself. Safe to run again.
+- **Windows:** allow **Private networks** when Windows asks on first start.
+- **macOS:** allow incoming connections if the firewall is on, and **Local Network** access when asked; Matter
+  needs it.
+
+### How it finds the hub and secret
+
+- **Hub:** scans each local /24 network for port 80 answering `401 {"Error":"Unauthorized"}` (the hub doesn't
+  advertise itself), then confirms with the secret.
+- **Secret:** tries `GET /secret`, which Wiser hubs only answer in setup mode, from their own Wi-Fi at
+  `192.168.8.1`. Otherwise paste it on the setup page.
+
+### Hub quirks it works around
+
+- **One connection at a time, about 5 s apart:** every request goes through one queue, commands ahead of polling.
+- **Responses over ~2.7 KB stall** (the hub resends most TCP segments), so `/data/domain/` is never fetched
+  whole; sections are polled individually and assembled in the cache.
+
+---
+
+## Build and release
+
+One script builds on Windows, macOS and Linux alike. It needs only [Go](https://go.dev/dl/); with
+[Node.js](https://nodejs.org) installed it also builds and embeds the Matter bridge, installing its
+dependencies itself.
 
 ```sh
 go run ./tools/build                       # this machine -> ./wiser-dashboard (.exe on Windows)
@@ -167,18 +238,55 @@ go run ./tools/build -all -package         # release archives (.tar.gz / .zip) -
 go run ./tools/build -matter=off           # without the Matter bridge (-matter=on: fail without Node.js)
 ```
 
-`./build.sh` (macOS, Linux) and `build.cmd` (Windows) are shortcuts for the same, e.g. `./build.sh -all`.
-Plain `go build -o wiser-dashboard .` also works and gives a build without the Matter bridge.
+`./build.sh` (macOS, Linux) and `build.cmd` (Windows) are shortcuts for the same. Plain
+`go build -o wiser-dashboard .` gives a build without the Matter bridge.
 
-The bridge's tests pair a real Matter controller with it against a mock hub. From `matter/`, after a
-build: `node test/e2e.mjs dist/wiser-matter-<os>-<arch>` (the bridge alone) and
-`node test/system.mjs ../wiser-dashboard` (the whole app).
-
-GitHub Actions (`.github/workflows/ci.yml`) checks every push and pull request on Linux, macOS and
-Windows (gofmt, vet, tests, a native build) and pairs a Matter controller with the bridge on each, then
-builds and packages every platform with the same build script; the archives are kept as workflow
-artifacts. To publish a release, push a version tag:
+Tests: `go test ./...` (MCP server), and from `matter/` after a build, `node test/e2e.mjs
+dist/wiser-matter-<os>-<arch>` (the bridge with a real Matter controller) and `node test/system.mjs
+../wiser-dashboard` (the whole app). GitHub Actions (`.github/workflows/ci.yml`) runs all of them on Linux, macOS
+and Windows for every push and pull request, then builds and packages every platform. A version tag publishes a
+release:
 
 ```sh
-git tag v1.0.0 && git push origin v1.0.0   # a tag with a dash, like v1.1.0-rc1, is marked pre-release
+git tag v1.4.0 && git push origin v1.4.0   # a tag with a dash, like v1.4.0-rc1, is marked pre-release
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to propose changes.
+
+---
+
+## Limitations, and what could be done
+
+Honest notes on what it doesn't do yet, with the way forward for each.
+
+| Limitation | What could be done |
+|---|---|
+| **Tested on one setup**: a first-generation Wiser hub (WT734R1S0902, firmware 3.18.3) with a relay-controlled gas boiler and two rooms. OpenTherm boilers, smart plugs, shutters, lights and radiator valves are shown, but with little dedicated control. | Testing with more hubs and devices, and dedicated controls for them, as owners report what they have. |
+| **The hub secret** is only fetched automatically in the hub's setup mode; otherwise it has to be pasted. That's the hardest step for non-technical users. | A guided setup page that walks through putting the hub in setup mode. |
+| **One hub** per dashboard. | Support for several hubs. |
+| **No HTTPS, and no password by default.** It's meant for a trusted home network; secrets travel over plain HTTP there. | Built-in HTTPS (e.g. a local certificate), and a password on by default. |
+| **claude.ai on the web** can't reach it without exposing it to the internet over HTTPS. MCP access is a single token, with no OAuth or per-assistant permissions. | OAuth for MCP, a read-only token option, and a guide for safe remote access (a tunnel or Home Assistant's remote access). |
+| **MCP can't edit schedules.** | Schedule tools with a preview and confirm step. |
+| **Matter isn't certified**, so apps warn when pairing. Google Home has no native "boost" control, so boosts are switches, and custom phrases need a Google routine. Hot water boost from Google is fixed at 30 minutes. | Certification would need a vendor ID and fees. A configurable hot water boost length, and extra hot water switches, are straightforward. |
+| **Matter on Android** sometimes fails to pair ("Something went wrong") because of an Android bug; pairing once from an iPhone or iPad works around it. Matter needs the phone, the dashboard and the smart-speaker hub on the same network, with mDNS. | Better diagnostics on the Google Home page for network problems. |
+| **No Matter on 32-bit Raspberry Pi OS** (armv7): Bun, which runs the bridge, doesn't support it. | Use the 64-bit OS; or a native Go Matter implementation (weeks of work). |
+| **Downloads are 30–40 MB**, because the bridge carries its own JavaScript runtime. | A native Go Matter bridge would bring them back to ~8 MB. |
+| **Unsigned programs**: macOS Gatekeeper and Windows SmartScreen warn on first start. | Code signing (Apple Developer ID, a Windows signing certificate) in the release pipeline. |
+| **History starts when the dashboard starts** and covers 14 days; nothing is kept while it isn't running. | Longer retention or export to a time-series database. |
+| **No app icon or background mode**: it's a program you leave running (or a Linux service). | A macOS app bundle, a Windows tray icon and a "start at login" option; an installable web app for phones. |
+| **No licence yet**, so others may read the code but have no explicit right to use or change it. | The author choosing an open-source licence (e.g. MIT or Apache-2.0). |
+
+---
+
+## Credits
+
+**Author: Mahmoud Alshinhab ([@shenhab](https://github.com/shenhab))**: *"I didn't code it, I clauded it."*
+The author set the goals, made the decisions and tested every feature on a real Wiser hub;
+**[Claude](https://www.anthropic.com/claude)** (Anthropic), working in Claude Code, wrote the code, the tests
+and the documentation.
+
+Built on [matter.js](https://github.com/project-chip/matter.js) (Apache-2.0) and [Bun](https://bun.sh) for the
+Matter bridge; everything else is Go's standard library.
+
+*Wiser, Drayton and Schneider Electric are trademarks of their owners. This is an independent project, not
+affiliated with or endorsed by them. It controls real heating equipment: use it with care.*
