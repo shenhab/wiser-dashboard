@@ -6,6 +6,10 @@
 #   $env:WISER_PORT = "8080"   $env:WISER_HUB = "192.168.1.50"   $env:WISER_UNINSTALL = "1"
 #   $env:WISER_SECRET = "..."  (the hub secret; otherwise the dashboard asks for it)
 #
+# The download is checked against the release's SHA-256 checksums (Windows
+# PowerShell has no Ed25519 to check their signature; the dashboard checks the
+# signature of every later update itself).
+#
 # Installs for your user in %LOCALAPPDATA%\wiser-dashboard, starts it minimized
 # at login, allows it through the firewall on private networks (when run as
 # administrator; otherwise Windows asks on first start), and checks it runs.

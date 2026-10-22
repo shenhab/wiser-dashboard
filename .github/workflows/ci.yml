@@ -178,6 +178,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7 # for the signing tool
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
       - uses: actions/download-artifact@v8
         with:
           path: dist
@@ -185,6 +190,13 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      # Updates install a release only if this signature verifies against the
+      # keys built into the program (internal/releasekeys). Without the secret,
+      # or with a key that isn't one of them, the release fails here.
+      - name: Sign the checksums
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: go run ./tools/sign dist/SHA256SUMS.txt
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

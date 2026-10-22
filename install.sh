@@ -19,6 +19,8 @@
 set -eu
 
 REPO="shenhab/wiser-dashboard"
+# The release signing keys (internal/releasekeys), as OpenSSL public keys.
+RELEASE_KEYS="MCowBQYDK2VwAyEA9JzdnhnMFHPU2Buxd5LDtzbAPMRVTVW8ZQZ+tDDJgXw= MCowBQYDK2VwAyEAbs4Cabad/CD+lNOC7GWeFo9KbAcNOL1ZnnhMC8OW1FE="
 VERSION="${WISER_VERSION:-}"
 HUB=""
 PORT=8080
@@ -192,6 +194,28 @@ trap 'rm -rf "$TMP"' EXIT
 say "Downloading Wiser Dashboard $VERSION for $PLATFORM"
 fetch "$URL/$NAME.tar.gz" "$TMP/$NAME.tar.gz" || die "download failed: $URL/$NAME.tar.gz"
 fetch "$URL/SHA256SUMS.txt" "$TMP/SHA256SUMS.txt" || die "couldn't download the checksums for $VERSION"
+# The checksums are signed with the project's release key. Verified with
+# OpenSSL 3 where it's available (most Linux); the dashboard itself checks the
+# signature of every later update on every system.
+if fetch "$URL/SHA256SUMS.txt.sig" "$TMP/SHA256SUMS.txt.sig" 2>/dev/null; then
+	if have openssl && openssl version 2>/dev/null | grep -q '^OpenSSL [3-9]'; then
+		openssl base64 -d -A -in "$TMP/SHA256SUMS.txt.sig" -out "$TMP/sig.bin" 2>/dev/null || die "the release signature is malformed"
+		SIGNED=0
+		for k in $RELEASE_KEYS; do
+			printf -- '-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n' "$k" >"$TMP/key.pem"
+			if openssl pkeyutl -verify -pubin -inkey "$TMP/key.pem" -rawin -in "$TMP/SHA256SUMS.txt" -sigfile "$TMP/sig.bin" >/dev/null 2>&1; then
+				SIGNED=1
+				break
+			fi
+		done
+		[ "$SIGNED" = 1 ] || die "the release signature doesn't match this project's signing keys: not installing it"
+		say "Signature verified"
+	else
+		warn "can't check the release signature here (needs OpenSSL 3); relying on the checksum. Updates are signature-checked by the dashboard."
+	fi
+else
+	warn "release $VERSION isn't signed (releases before v1.5.0 aren't); relying on the checksum"
+fi
 WANT=$(grep " $NAME.tar.gz\$" "$TMP/SHA256SUMS.txt" | cut -d' ' -f1)
 [ -n "$WANT" ] || die "$NAME.tar.gz isn't listed in the release's checksums"
 [ "$(sha256 "$TMP/$NAME.tar.gz")" = "$WANT" ] || die "checksum mismatch: the download is damaged or was tampered with"
