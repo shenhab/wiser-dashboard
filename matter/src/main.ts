@@ -12,7 +12,7 @@ import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import { ThermostatServer } from "@matter/main/behaviors/thermostat";
 import { Thermostat } from "@matter/main/clusters/thermostat";
-import { OnOffPlugInUnitDevice } from "@matter/main/devices/on-off-plug-in-unit";
+import { OnOffPlugInUnitDevice, OnOffPlugInUnitRequirements } from "@matter/main/devices/on-off-plug-in-unit";
 import { ThermostatDevice } from "@matter/main/devices/thermostat";
 import { QrCode } from "@matter/main/types";
 import { randomInt } from "node:crypto";
@@ -154,21 +154,42 @@ const server = await ServerNode.create({
 const bridge = new Endpoint(AggregatorEndpoint, { id: "wiser" });
 await server.add(bridge);
 
+// Switches act on the controller's on/off commands rather than on their state
+// changing: a repeated "on" then restarts a boost, and an "off" can't be lost
+// to a hub reading applied in between. toggle() and the timed commands go
+// through on() and off() too.
+const switchCommands = new Map<string, (on: boolean) => void>(); // endpoint id -> handler
+class CommandOnOffServer extends OnOffPlugInUnitRequirements.OnOffServer {
+    override async on() {
+        await super.on();
+        switchCommands.get(this.endpoint.id)?.(true);
+    }
+    override async off() {
+        await super.off();
+        switchCommands.get(this.endpoint.id)?.(false);
+    }
+}
+
 const RoomDevice = ThermostatDevice.with(BridgedDeviceBasicInformationServer, ThermostatServer.with(Thermostat.Feature.Heating));
-const HotWaterDevice = OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationServer);
+const HotWaterDevice = OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationServer, CommandOnOffServer);
 
 const rooms = new Map<number, Endpoint<typeof RoomDevice>>();
 const hotWater = new Map<number, Endpoint<typeof HotWaterDevice>>();
 const boosts = new Map<number, Endpoint<typeof HotWaterDevice>>(); // room id -> boost switch
 let lastDomain: any = null;
 const heldUntil = new Map<string, number>(); // endpoint id -> time its pending command settles
+const commandAt = new Map<string, number>(); // endpoint id -> time of its last command
 const lastOnSetpoint = new Map<number, number>(); // room id -> last setpoint that wasn't "off"
 
 function hold(key: string) {
+    commandAt.set(key, Date.now());
     heldUntil.set(key, Date.now() + HOLD_AFTER_WRITE_MS);
 }
+// fetchedAt is set when each hub reading is requested: a reading requested
+// before a command is out of date for that endpoint, however long it took.
+let fetchedAt = 0;
 function held(key: string) {
-    return (heldUntil.get(key) ?? 0) > Date.now();
+    return (heldUntil.get(key) ?? 0) > Date.now() || (commandAt.get(key) ?? -1) >= fetchedAt;
 }
 
 function label(name: string) {
@@ -268,8 +289,7 @@ function watchHotWater(hwId: number, ep: Endpoint<typeof HotWaterDevice>) {
     const key = `hotwater-${hwId}`;
     const path = `/data/domain/HotWater/${hwId}`;
     // On boosts for half an hour; off turns it off until the next scheduled change.
-    ep.events.onOff.onOff$Changed.on((on, _old, context) => {
-        if (context?.fabric === undefined) return;
+    switchCommands.set(ep.id, on => {
         const ov = on
             ? { Type: "Manual", SetPoint: HOT_WATER_ON, DurationMinutes: HOT_WATER_BOOST_MINUTES, Originator: "App" }
             : { Type: "Manual", SetPoint: OFF };
@@ -315,8 +335,7 @@ function boostSetpoint(room: any) {
 function watchBoost(roomId: number, ep: Endpoint<typeof HotWaterDevice>) {
     const key = `boost-${roomId}`;
     const path = `/data/domain/Room/${roomId}`;
-    ep.events.onOff.onOff$Changed.on((on, _old, context) => {
-        if (context?.fabric === undefined) return;
+    switchCommands.set(ep.id, on => {
         hold(`room-${roomId}`); // the thermostat shows the boost once the hub reports it
         if (!on) {
             void command(key, path, { RequestOverride: { Type: "None" } }, `${key} cancelled`);
@@ -379,11 +398,13 @@ function syncSoon() {
 
 async function sync() {
     let domain: any;
+    const requestedAt = Date.now();
     try {
         domain = await hub("GET", "/data/domain/");
         lastGood = Date.now();
         lastError = "";
         lastDomain = domain;
+        fetchedAt = requestedAt;
     } catch (e) {
         lastError = (e as Error).message;
         if (lastGood && Date.now() - lastGood > UNREACHABLE_AFTER_MS) await setReachable(false);
