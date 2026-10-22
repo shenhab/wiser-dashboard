@@ -127,10 +127,12 @@ const nodeId = await controller.commissionNode({
     discovery: {
         identifierData: longDiscriminator !== undefined ? { longDiscriminator } : { shortDiscriminator },
         discoveryCapabilities: { onIpNetwork: true },
+        // CI on macOS: no Local Network permission, so no mDNS; go straight to the address.
+        knownAddress: process.env.MATTER_TEST_KNOWN_ADDRESS ? { ip: "127.0.0.1", port: MATTER_PORT, type: "udp" } : undefined,
     },
     passcode,
 });
-check("controller pairs with the bridge (found over mDNS)", !!nodeId);
+check(`controller pairs with the bridge (${process.env.MATTER_TEST_KNOWN_ADDRESS ? "by address" : "found over mDNS"})`, !!nodeId);
 
 const node = await controller.getNode(nodeId);
 node.connect();

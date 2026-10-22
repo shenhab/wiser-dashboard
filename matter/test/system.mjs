@@ -118,6 +118,8 @@ const nodeId = await controller.commissionNode({
     discovery: {
         identifierData: code.longDiscriminator !== undefined ? { longDiscriminator: code.longDiscriminator } : { shortDiscriminator: code.shortDiscriminator },
         discoveryCapabilities: { onIpNetwork: true },
+        // CI on macOS: no Local Network permission, so no mDNS; go straight to the address.
+        knownAddress: process.env.MATTER_TEST_KNOWN_ADDRESS ? { ip: "127.0.0.1", port: 5561, type: "udp" } : undefined,
     },
     passcode: code.passcode,
 });
