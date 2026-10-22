@@ -36,6 +36,7 @@ type Server struct {
 	mcpOff        bool // -mcp=false
 	updater       *Updater
 	autoUpdate    bool
+	identifyOff   map[int]*time.Timer // device -> its pending "identify off"
 	candidates    []Candidate
 	discovering   bool
 	lastScan      time.Time

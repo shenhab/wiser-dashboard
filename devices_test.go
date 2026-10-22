@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // deviceHub is a fake hub for the add-device wizard: it keeps rooms and
@@ -244,5 +245,46 @@ func TestUnassignedDevices(t *testing.T) {
 	// rooms, and the smart plug (9) isn't attached to rooms this way.
 	if !out.OK || len(ids) != 3 || ids[0] != 5 || ids[1] != 6 || ids[2] != 8 || len(out.Rooms) != 4 {
 		t.Errorf("unassigned: ok=%v devices=%v rooms=%d", out.OK, ids, len(out.Rooms))
+	}
+}
+
+func TestIdentifyTurnsItselfOff(t *testing.T) {
+	ts, h := newDeviceTestServer(t)
+	old := identifyFor
+	identifyFor = 300 * time.Millisecond
+	t.Cleanup(func() { identifyFor = old })
+	identifyWrites := func() []string {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		var out []string
+		for _, w := range h.writes {
+			if strings.Contains(w, "Identify") {
+				out = append(out, w)
+			}
+		}
+		return out
+	}
+
+	// On, then off by itself.
+	if r := post(t, ts, "/api/devices/identify", map[string]any{"device": 3, "on": true}); r["ok"] != true {
+		t.Fatalf("identify: %v", r)
+	}
+	time.Sleep(time.Second)
+	if got := strings.Join(identifyWrites(), "\n"); got != `PATCH /data/domain/Device/3 {"Identify":true}`+"\n"+`PATCH /data/domain/Device/3 {"Identify":false}` {
+		t.Errorf("after the time ran out:\n%s", got)
+	}
+
+	// Stopped early: one "off", and the timer doesn't send another.
+	post(t, ts, "/api/devices/identify", map[string]any{"device": 5, "on": true})
+	post(t, ts, "/api/devices/identify", map[string]any{"device": 5, "on": false})
+	time.Sleep(time.Second)
+	n := 0
+	for _, w := range identifyWrites() {
+		if strings.HasPrefix(w, "PATCH /data/domain/Device/5 ") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("device 5 got %d identify writes, want 2 (on, then one off)", n)
 	}
 }

@@ -53,7 +53,12 @@ func (s *Server) handlePermitJoin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "until": time.Now().Add(time.Duration(req.Seconds) * time.Second)})
 }
 
-// handleIdentify makes a device blink (or stop).
+// identifyFor is how long a device identifies (flashes) before the dashboard
+// turns it off again: the hub leaves it on until told otherwise.
+var identifyFor = 30 * time.Second
+
+// handleIdentify makes a device identify for identifyFor, or stops it.
+// The "off" is sent from here, so it happens even if the page is closed.
 func (s *Server) handleIdentify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Device int  `json:"device"`
@@ -63,14 +68,39 @@ func (s *Server) handleIdentify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"ok": false, "error": "device is required"})
 		return
 	}
-	body, _ := json.Marshal(map[string]bool{"Identify": req.On})
+	s.mu.Lock()
+	if t := s.identifyOff[req.Device]; t != nil {
+		t.Stop()
+		delete(s.identifyOff, req.Device)
+	}
+	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
-	if err := hubError(s.forward(ctx, "PATCH", fmt.Sprintf("/data/domain/Device/%d", req.Device), body)); err != nil {
+	if err := s.setIdentify(ctx, req.Device, req.On); err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true})
+	if req.On {
+		s.mu.Lock()
+		if s.identifyOff == nil {
+			s.identifyOff = map[int]*time.Timer{}
+		}
+		s.identifyOff[req.Device] = time.AfterFunc(identifyFor, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			s.setIdentify(ctx, req.Device, false)
+			s.mu.Lock()
+			delete(s.identifyOff, req.Device)
+			s.mu.Unlock()
+		})
+		s.mu.Unlock()
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "seconds": int(identifyFor.Seconds())})
+}
+
+func (s *Server) setIdentify(ctx context.Context, device int, on bool) error {
+	body, _ := json.Marshal(map[string]bool{"Identify": on})
+	return hubError(s.forward(ctx, "PATCH", fmt.Sprintf("/data/domain/Device/%d", device), body))
 }
 
 // handleCreateRoom adds a room and returns its id.
