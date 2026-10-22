@@ -32,6 +32,8 @@ type Server struct {
 	labels        map[string]string // heating channel id -> display name
 	alertSettings AlertSettings
 	boost         BoostSettings // Matter boost switches
+	mcpToken      string
+	mcpOff        bool // -mcp=false
 	candidates    []Candidate
 	discovering   bool
 	lastScan      time.Time
@@ -53,6 +55,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/matter", s.handleMatter)
 	mux.HandleFunc("POST /api/matter/reset", s.handleMatterReset)
 	mux.HandleFunc("POST /api/matter/boost", s.handleMatterBoost)
+	mux.HandleFunc("GET /api/mcp", s.handleMCPInfo)
+	mux.HandleFunc("POST /api/mcp/token", s.handleMCPToken)
 	mux.HandleFunc("GET /api/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/setup/discover", s.handleDiscover)
 	mux.HandleFunc("POST /api/setup/fetch-secret", s.handleFetchSecret)
@@ -65,6 +69,11 @@ func (s *Server) routes() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/data/") {
 			s.serveHubAPI(w, r)
+			return
+		}
+		// The MCP server checks its own token instead of the dashboard password.
+		if r.URL.Path == "/mcp" && !s.mcpOff {
+			s.serveMCP(w, r)
 			return
 		}
 		ui.ServeHTTP(w, r)
@@ -371,7 +380,7 @@ func (s *Server) save(ip, secret string) error {
 		return nil
 	}
 	s.mu.Lock()
-	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost}
+	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost, MCPToken: s.mcpToken}
 	err := saveConfig(s.configPath, cfg)
 	s.mu.Unlock()
 	return err
@@ -412,6 +421,31 @@ func (s *Server) handleMatterBoost(w http.ResponseWriter, r *http.Request) {
 	if s.matter != nil {
 		s.matter.SetBoost(b)
 	}
+	ip, secret := s.hub.Target()
+	if err := s.save(ip, secret); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleMCPInfo tells the settings page how to connect an AI assistant.
+func (s *Server) handleMCPInfo(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	token := s.mcpToken
+	s.mu.Unlock()
+	base := s.lanURL()
+	if base == "" {
+		base = "http://" + r.Host
+	}
+	writeJSON(w, 200, map[string]any{"enabled": !s.mcpOff, "url": base + "/mcp", "token": token, "tools": len(mcpTools)})
+}
+
+// handleMCPToken replaces the MCP token; assistants using the old one lose access.
+func (s *Server) handleMCPToken(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.mcpToken = newMCPToken()
+	s.mu.Unlock()
 	ip, secret := s.hub.Target()
 	if err := s.save(ip, secret); err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})

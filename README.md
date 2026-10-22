@@ -78,6 +78,32 @@ the dashboard. Pairing is kept across restarts; the same page lists paired apps 
   That's why release downloads are 30–40 MB.
 - It isn't Matter-certified, so apps warn about an uncertified device when pairing; that's expected.
 
+## AI assistants (MCP)
+
+The dashboard is also an [MCP](https://modelcontextprotocol.io) server, so Claude and other AI assistants
+can read and control the heating: *"why was upstairs cold this morning?"*, *"how often did the boiler start
+today?"*, *"boost the ground floor for an hour"*.
+
+- **Read:** `get_status`, `get_history`, `get_boiler_cycles`, `get_warmup_rates`, `get_alerts`,
+  `get_hub_health`, `get_schedules`.
+- **Control:** `set_room_temperature`, `boost_room`, `room_off`, `resume_schedule`, `hot_water`,
+  `set_away_mode`. Changes are overrides (for some minutes or until the schedule's next change) within
+  5–30°, sent through the same queue as the dashboard, so the dashboard, Home Assistant and Google Home all
+  see them. Control tools are marked as such, so assistants ask before using them.
+
+It's at `http://<this-machine>:8080/mcp` (MCP's streamable HTTP transport) and needs its own token, made on
+first start and shown with ready-made setup under **Advanced → AI assistants**, where it can also be
+replaced. It's separate from the hub secret.
+
+```sh
+# Claude Code
+claude mcp add --transport http wiser http://<this-machine>:8080/mcp --header "Authorization: Bearer <token>"
+```
+
+Apps that only start local MCP servers (like Claude Desktop) run the same program as a relay:
+`wiser-dashboard mcp -url http://<this-machine>:8080/mcp` with the token in `WISER_MCP_TOKEN`. `-mcp=false`
+turns the MCP server off.
+
 ## Firewall
 
 The dashboard needs TCP 8080 (the dashboard and Home Assistant), UDP 5540 (Matter) and UDP 5353 (mDNS,

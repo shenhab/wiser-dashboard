@@ -22,6 +22,10 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		runMCPStdio(os.Args[2:])
+		return
+	}
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	listen := flag.String("listen", ":8080", "address the dashboard listens on")
 	hubIP := flag.String("hub", "", "hub IP address (skips discovery)")
@@ -33,6 +37,7 @@ func main() {
 	matterOn := flag.Bool("matter", true, "run the Matter bridge (Google Home, Apple Home, Alexa) when this build includes it")
 	matterPort := flag.Int("matter-port", 5540, "UDP port for the Matter bridge")
 	matterBin := flag.String("matter-bin", "", "run this Matter bridge binary instead of the built-in one")
+	mcpOn := flag.Bool("mcp", true, "serve the MCP server for AI assistants at /mcp (needs its token)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("wiser-dashboard", version)
@@ -72,6 +77,16 @@ func main() {
 	srv := &Server{hub: hub, store: store, poller: poller, history: history, health: health, configPath: *configPath, password: *password, listen: *listen,
 		labels: cfg.ChannelNames, alertSettings: cfg.Alerts}
 	srv.boost = cfg.Boost.withDefaults()
+	srv.mcpOff = !*mcpOn
+	srv.mcpToken = cfg.MCPToken
+	if srv.mcpToken == "" {
+		// First start: make this install's MCP token and keep it.
+		cfg.MCPToken = newMCPToken()
+		srv.mcpToken = cfg.MCPToken
+		if err := saveConfig(*configPath, cfg); err != nil {
+			log.Printf("saving the MCP token: %v", err)
+		}
+	}
 	if m := NewMatter(hub, *matterBin, filepath.Join(filepath.Dir(*configPath), "matter"), *matterPort, *listen); *matterOn && m.Available() {
 		m.SetBoost(srv.boost)
 		srv.matter = m

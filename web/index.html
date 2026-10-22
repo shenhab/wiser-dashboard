@@ -1128,11 +1128,11 @@ function capabilitiesCard() {
 
 // ---------------- advanced ----------------
 function viewAdvanced() {
-  const sub = {settings: advSettings, smarthome: advSmartHome, alerts: advAlerts, system: advSystem, network: advNetwork, explorer: advExplorer};
+  const sub = {settings: advSettings, smarthome: advSmartHome, mcp: advMCP, alerts: advAlerts, system: advSystem, network: advNetwork, explorer: advExplorer};
   if (!sub[S.adv]) S.adv = "settings";
   const nAlerts = (S.state.alerts || []).filter(a => a.level !== "info").length;
   return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Advanced</h1><p class="muted" style="margin:0">Everything the hub exposes. Changes go straight to the hub.</p></section>
-    <div class="row" style="margin:18px 0 0"><div class="seg" style="overflow-x:auto;max-width:100%">${[["settings", "Hub settings"], ["smarthome", "Google Home"], ["alerts", "Alerts" + (nAlerts ? ` (${nAlerts})` : "")], ["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
+    <div class="row" style="margin:18px 0 0"><div class="seg" style="overflow-x:auto;max-width:100%">${[["settings", "Hub settings"], ["smarthome", "Google Home"], ["mcp", "AI assistants"], ["alerts", "Alerts" + (nAlerts ? ` (${nAlerts})` : "")], ["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
     <button class="btn sm" style="margin-left:auto" onclick="openSetup()">Hub connection</button></div>
     ${sub[S.adv]()}`;
 }
@@ -1280,6 +1280,44 @@ async function matterReset() {
   S.confirmReset = false;
   try { const r = await api("/api/matter/reset", {}); r.ok ? toast("All pairings removed") : toast(r.error, true); } catch (e) { toast(e.message, true); }
   poll(true);
+}
+// ---------------- AI assistants (MCP) ----------------
+async function loadMCP() { try { S.mcp = await api("/api/mcp"); render(); } catch (e) { toast(e.message, true); } }
+function advMCP() {
+  const m = S.mcp;
+  if (!m) { loadMCP(); return `<div class="card" style="margin-top:18px"><span class="spin"></span></div>`; }
+  if (!m.enabled) return `<div class="section-h"><h2>AI assistants</h2></div><div class="card"><p class="small muted" style="margin:0">The MCP server is turned off (started with <span class="mono">-mcp=false</span>).</p></div>`;
+  const tok = S.showToken ? m.token : m.token.slice(0, 6) + "•".repeat(20);
+  const code = `claude mcp add --transport http wiser ${m.url} --header "Authorization: Bearer ${m.token}"`;
+  const desktop = JSON.stringify({mcpServers: {wiser: {command: "/path/to/wiser-dashboard", args: ["mcp", "-url", m.url], env: {WISER_MCP_TOKEN: m.token}}}}, null, 2);
+  const show = s => S.showToken ? esc(s) : esc(s.split(m.token).join(tok));
+  return `<div class="section-h"><h2>AI assistants (MCP)</h2></div><div class="card">
+      <p class="small muted" style="margin-top:0">Lets Claude and other assistants that speak the <b>Model Context Protocol</b> read your heating (status, history, boiler starts, warm-up speed, alerts, hub health, schedules) and control it (room temperatures, boosts, rooms off, back to schedule, hot water, away mode). Ask things like <i>"why was upstairs cold this morning?"</i> or <i>"boost the ground floor for an hour"</i>.</p>
+      <table class="kv">
+        <tr><td style="width:1%;white-space:nowrap"><b>Address</b></td><td class="mono small">${esc(m.url)}</td><td style="width:1%"><button class="btn sm" onclick="copyText(S.mcp.url,'Address copied')">Copy</button></td></tr>
+        <tr><td><b>Token</b></td><td class="mono small" style="word-break:break-all">${esc(tok)}</td><td style="white-space:nowrap"><button class="btn sm" onclick="S.showToken=!S.showToken;render()">${S.showToken ? "Hide" : "Show"}</button> <button class="btn sm" onclick="copyText(S.mcp.token,'Token copied')">Copy</button></td></tr>
+      </table>
+      <p class="faint xs" style="margin:10px 0 0">The token gives full control of the heating to whoever has it; it's separate from the hub secret, so you can replace it without affecting Home Assistant or Google Home. Works on your home network; claude.ai on the web needs the dashboard reachable over HTTPS from the internet.</p>
+    </div>
+    <div class="section-h"><h2>Connect</h2></div><div class="card">
+      <b>Claude Code</b>
+      <pre style="white-space:pre-wrap;word-break:break-all">${show(code)}</pre>
+      <button class="btn sm" onclick="copyText(${esc(JSON.stringify(code))},'Copied')">Copy command</button>
+      <div style="margin-top:16px"><b>Claude Desktop</b> <span class="faint small">and other apps that start local MCP servers</span></div>
+      <p class="small muted" style="margin:6px 0">Add to <span class="mono">claude_desktop_config.json</span> (Settings → Developer → Edit Config), with the path to this program on that computer (download it from the Releases page if needed), then restart Claude Desktop:</p>
+      <pre style="white-space:pre-wrap;word-break:break-all">${show(desktop)}</pre>
+      <button class="btn sm" onclick="copyText(${esc(JSON.stringify(desktop))},'Copied')">Copy config</button>
+      <div style="margin-top:16px"><b>Other MCP clients</b></div>
+      <p class="small muted" style="margin:6px 0 0">Streamable HTTP transport at the address above, with the header <span class="mono">Authorization: Bearer &lt;token&gt;</span>.</p>
+    </div>
+    <div class="section-h"><h2>Replace the token</h2></div><div class="card"><div class="setting"><div class="l"><b>New token</b><span>Every assistant using the current one loses access until you give it the new one.</span></div>
+      <button class="btn sm" onclick="mcpNewToken()">${S.confirmToken ? "Click again to replace" : "Replace"}</button></div></div>`;
+}
+async function mcpNewToken() {
+  if (!S.confirmToken) { S.confirmToken = true; render(); setTimeout(() => { S.confirmToken = false; render(); }, 5000); return; }
+  S.confirmToken = false;
+  try { const r = await api("/api/mcp/token", {}); r.ok ? toast("New token made; update your assistants") : toast(r.error, true); } catch (e) { toast(e.message, true); }
+  loadMCP();
 }
 function haYaml() {
   return `rest:
