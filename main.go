@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -29,6 +30,9 @@ func main() {
 	configPath := flag.String("config", defaultConfigPath(), "where the hub IP and secret are saved")
 	password := flag.String("password", "", "require this password (HTTP basic auth, any username) to open the dashboard")
 	noDiscover := flag.Bool("no-discover", false, "do not scan the network for the hub at startup")
+	matterOn := flag.Bool("matter", true, "run the Matter bridge (Google Home, Apple Home, Alexa) when this build includes it")
+	matterPort := flag.Int("matter-port", 5540, "UDP port for the Matter bridge")
+	matterBin := flag.String("matter-bin", "", "run this Matter bridge binary instead of the built-in one")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("wiser-dashboard", version)
@@ -67,12 +71,20 @@ func main() {
 	health := NewHealth(filepath.Join(filepath.Dir(*configPath), "health.jsonl"))
 	srv := &Server{hub: hub, store: store, poller: poller, history: history, health: health, configPath: *configPath, password: *password, listen: *listen,
 		labels: cfg.ChannelNames, alertSettings: cfg.Alerts}
+	if m := NewMatter(hub, *matterBin, filepath.Join(filepath.Dir(*configPath), "matter"), *matterPort, *listen); *matterOn && m.Available() {
+		srv.matter = m
+	}
 
 	hub.SetTarget(cfg.HubIP, cfg.Secret)
 	go poller.Run(ctx)
 	go history.Run(ctx, store)
 	go health.Run(ctx, store, hub)
 	go bootstrap(ctx, srv, cfg, !*noDiscover)
+	var bg sync.WaitGroup
+	if srv.matter != nil {
+		bg.Add(1)
+		go func() { defer bg.Done(); srv.matter.Run(ctx) }()
+	}
 
 	httpSrv := &http.Server{Addr: *listen, Handler: srv.routes(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -85,6 +97,7 @@ func main() {
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+	bg.Wait() // let the Matter bridge save its state and stop
 }
 
 // bootstrap fills in whatever is missing: it finds the hub, then tries to

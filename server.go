@@ -26,6 +26,7 @@ type Server struct {
 	configPath string
 	password   string
 	listen     string
+	matter     *Matter
 
 	mu            sync.Mutex
 	labels        map[string]string // heating channel id -> display name
@@ -48,6 +49,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/alerts", s.handleAlerts)
 	mux.HandleFunc("POST /api/settings", s.handleSettings)
+	mux.HandleFunc("GET /api/matter", s.handleMatter)
+	mux.HandleFunc("POST /api/matter/reset", s.handleMatterReset)
 	mux.HandleFunc("GET /api/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/setup/discover", s.handleDiscover)
 	mux.HandleFunc("POST /api/setup/fetch-secret", s.handleFetchSecret)
@@ -108,6 +111,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		"busy":         s.hub.busy.Load(),
 		"sections":     s.store.Snapshot(),
 		"extras":       s.poller.Extras(),
+		"matter":       s.matter.State(),
 		"now":          time.Now(),
 	})
 }
@@ -369,4 +373,22 @@ func (s *Server) save(ip, secret string) error {
 	err := saveConfig(s.configPath, cfg)
 	s.mu.Unlock()
 	return err
+}
+
+// handleMatter reports the Matter bridge: pairing codes, paired controllers.
+func (s *Server) handleMatter(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.matter.State())
+}
+
+// handleMatterReset removes every Matter pairing.
+func (s *Server) handleMatterReset(w http.ResponseWriter, r *http.Request) {
+	if s.matter == nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "this build has no Matter bridge"})
+		return
+	}
+	if err := s.matter.Reset(); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }

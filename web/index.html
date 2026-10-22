@@ -261,6 +261,11 @@ details[open] > summary::before { transform: rotate(90deg); }
   .sheet { padding: 0 16px 40px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+.pair { display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: start; margin-top: 14px; }
+.pair-code { text-align: center; }
+.qr { width: 200px; height: 200px; display: block; border-radius: 8px; border: 1px solid var(--line); }
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+@media (max-width: 560px) { .pair { grid-template-columns: 1fr; justify-items: center; } .qr { width: 180px; height: 180px; } }
 </style>
 </head>
 <body>
@@ -368,7 +373,7 @@ async function poll(force) {
   settlePending();
   renderStatus();
   if (!S.state.configured && !S.setupOpen) openSetup();
-  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras, S.state.alerts, S.state.settings]);
+  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras, S.state.alerts, S.state.settings, S.state.matter]);
   const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.closest(".modal");
   if (force || (sig !== S.lastSig && !typing && !S.edit)) { S.lastSig = sig; render(); }
 }
@@ -1041,7 +1046,9 @@ function signalLine(hs) {
 // ---------------- devices ----------------
 function viewDevices() {
   const devs = sec("Device") || [], rs = rooms();
-  return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Devices</h1></section><div class="section-h"><h2>On the network</h2></div>
+  const m = S.state.matter || {};
+  const nudge = m.available && m.status && !m.status.commissioned ? `<div class="card row" style="margin-top:16px;justify-content:space-between;flex-wrap:wrap;gap:10px"><div><b>Use with Google Home, Apple Home or Alexa</b><div class="faint small">Voice control and remote access for your rooms and hot water</div></div><button class="btn sm primary" onclick="go('advanced','smarthome')">Connect</button></div>` : "";
+  return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Devices</h1></section>${nudge}<div class="section-h"><h2>On the network</h2></div>
   <div class="grid">${devs.map(d => {
     const room = rs.find(r => r.RoomStatId === d.id);
     const sig = d.DisplayedSignalStrength || "–";
@@ -1121,11 +1128,11 @@ function capabilitiesCard() {
 
 // ---------------- advanced ----------------
 function viewAdvanced() {
-  const sub = {settings: advSettings, alerts: advAlerts, system: advSystem, network: advNetwork, explorer: advExplorer};
+  const sub = {settings: advSettings, smarthome: advSmartHome, alerts: advAlerts, system: advSystem, network: advNetwork, explorer: advExplorer};
   if (!sub[S.adv]) S.adv = "settings";
   const nAlerts = (S.state.alerts || []).filter(a => a.level !== "info").length;
   return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Advanced</h1><p class="muted" style="margin:0">Everything the hub exposes. Changes go straight to the hub.</p></section>
-    <div class="row" style="margin:18px 0 0"><div class="seg" style="overflow-x:auto;max-width:100%">${[["settings", "Hub settings"], ["alerts", "Alerts" + (nAlerts ? ` (${nAlerts})` : "")], ["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
+    <div class="row" style="margin:18px 0 0"><div class="seg" style="overflow-x:auto;max-width:100%">${[["settings", "Hub settings"], ["smarthome", "Google Home"], ["alerts", "Alerts" + (nAlerts ? ` (${nAlerts})` : "")], ["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
     <button class="btn sm" style="margin-left:auto" onclick="openSetup()">Hub connection</button></div>
     ${sub[S.adv]()}`;
 }
@@ -1191,6 +1198,64 @@ function advAlerts() {
       <pre id="hayaml">${esc(yaml)}</pre>
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="copyText(haYaml(),'Copied')">Copy</button><span class="faint xs">The sensor's value is the number of warning and critical alerts; its "summary" lists them.</span></div>
     </div>`;
+}
+// ---------------- smart home (Matter) ----------------
+const MATTER_VENDORS = {0x6006: "Google Home", 0x1349: "Apple Home", 0x1217: "Amazon Alexa", 0x110A: "SmartThings"};
+function qrSvg(rows) {
+  const q = 4, n = rows.length + 2 * q;
+  let d = "";
+  rows.forEach((row, y) => [...row].forEach((c, x) => { if (c === "1") d += `M${x + q} ${y + q}h1v1h-1z`; }));
+  return `<svg class="qr" viewBox="0 0 ${n} ${n}" role="img" aria-label="Matter pairing QR code" shape-rendering="crispEdges"><rect width="${n}" height="${n}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+}
+const manualCode = c => String(c || "").replace(/^(\d{4})(\d{3})(\d{4})$/, "$1-$2-$3");
+function advSmartHome() {
+  const m = S.state.matter || {}, st = m.status;
+  if (!m.available) return `<div class="section-h"><h2>Google Home, Apple Home and Alexa</h2></div><div class="card"><p class="small muted" style="margin:0">This build doesn't include the Matter bridge. The downloads on the Releases page do; a build of your own needs <span class="mono">-tags matter</span>, see the README.</p></div>`;
+  if (!st) return `<div class="section-h"><h2>Google Home, Apple Home and Alexa</h2></div><div class="card"><div class="row"><span class="spin"></span><span class="small">Starting the Matter bridge…</span></div>${m.error ? `<p class="small" style="color:var(--crit)">${esc(m.error)}</p>` : ""}</div>`;
+  const rs = rooms(), fabrics = st.fabrics || [];
+  const chips = `<div class="row" style="flex-wrap:wrap;gap:8px">
+      ${st.commissioned ? `<span class="chip good">Paired</span>` : `<span class="chip warn">Not paired yet</span>`}
+      ${m.running ? (st.hubReachable ? `<span class="chip good">Reading the hub</span>` : `<span class="chip warn">Waiting for hub data</span>`) : `<span class="chip crit">Bridge stopped${m.error ? ": " + esc(m.error) : ""}</span>`}
+      <span class="faint xs">${st.devices} devices · UDP port ${st.port}${st.version ? " · " + esc(st.version) : ""}</span></div>`;
+  const devices = `<div class="section-h"><h2>What your apps will see</h2></div><div class="card"><table class="kv">
+      ${rs.map(r => `<tr><td><b>${esc(r.Name)}</b></td><td class="small muted">Thermostat: temperature, target, heat or off</td></tr>`).join("")}
+      ${(sec("HotWater") || []).length ? `<tr><td><b>Hot water</b></td><td class="small muted">Switch: on boosts it for 30 minutes, off turns it off</td></tr>` : ""}
+    </table><p class="faint xs" style="margin:10px 0 0">Changing a target or turning a room on holds it until the next schedule change, like the Wiser app does.</p></div>
+    <div class="section-h"><h2>Try saying</h2></div><div class="card small">
+      <div>"Hey Google, set ${esc(rs[0]?.Name || "the living room")} to 21 degrees"</div>
+      <div style="margin-top:6px">"Hey Google, what's the temperature in ${esc(rs[1]?.Name || rs[0]?.Name || "the kitchen")}?"</div>
+      <div style="margin-top:6px">"Hey Google, turn on hot water"</div>
+      <p class="faint xs" style="margin:10px 0 0">Works away from home too, through your Google Nest speaker, display or TV streamer, which must stay plugged in at home. Gemini can control these the same way.</p></div>`;
+  if (!st.commissioned) {
+    return `<div class="section-h"><h2>Connect to Google Home, Apple Home or Alexa</h2></div><div class="card">${chips}
+      <div class="pair">
+        <div class="pair-code">${st.qrRows?.length ? qrSvg(st.qrRows) : ""}<div class="mono" style="font-size:1.15rem;letter-spacing:.04em;margin-top:8px">${esc(manualCode(st.manualCode))}</div>
+          <button class="btn sm" style="margin-top:8px" onclick="copyText('${esc(st.manualCode)}','Code copied')">Copy code</button></div>
+        <ol class="small steps">
+          <li>Make sure your phone is on the same Wi-Fi as this computer, and your Google Nest speaker or display is set up.</li>
+          <li>Open the <b>Google Home</b> app, tap <b>+</b> → <b>Device</b> → <b>New device</b>, pick your home, then <b>Matter-enabled device</b>.</li>
+          <li>Scan this QR code, or tap <i>Set up without QR code</i> and type the code below it.</li>
+          <li>Google warns that the device isn't certified. That's expected for a home-made bridge; tap <b>Set up anyway</b>.</li>
+        </ol>
+      </div>
+      <details class="small" style="margin-top:6px"><summary>Apple Home, Alexa or SmartThings instead</summary>
+        <p class="muted"><b>Apple Home:</b> + → Add Accessory → scan the code. <b>Alexa:</b> Devices → + → Add Device → Other → Matter. <b>SmartThings:</b> + → Add device → Scan QR code.</p></details>
+      <details class="small"><summary>Pairing fails on Android with "Something went wrong"</summary>
+        <p class="muted">Some Android versions leave out a setting Matter requires. Pairing once from the Google Home app on an iPhone or iPad works around it; afterwards everything works from Android too.</p></details>
+    </div>${devices}`;
+  }
+  return `<div class="section-h"><h2>Google Home, Apple Home and Alexa</h2></div><div class="card">${chips}
+      <table class="kv" style="margin-top:10px">${fabrics.map(f => `<tr><td><b>${esc(MATTER_VENDORS[f.vendorId] || f.label || "Matter app")}</b></td><td class="small muted">${f.label && MATTER_VENDORS[f.vendorId] ? esc(f.label) : ""}</td></tr>`).join("")}</table>
+      <p class="faint xs" style="margin:10px 0 0">To add it to a second app as well, use the share option of the app it's already in (in Google Home: the device's settings → <i>Linked Matter apps &amp; services</i>).</p>
+    </div>${devices}
+    <div class="section-h"><h2>Start over</h2></div><div class="card"><div class="setting"><div class="l"><b>Remove all pairings</b><span>Disconnects every app. You'll need to pair again with the QR code.</span></div>
+      <button class="btn sm" onclick="matterReset(this)">${S.confirmReset ? "Click again to remove" : "Remove"}</button></div></div>`;
+}
+async function matterReset() {
+  if (!S.confirmReset) { S.confirmReset = true; render(); setTimeout(() => { S.confirmReset = false; render(); }, 5000); return; }
+  S.confirmReset = false;
+  try { const r = await api("/api/matter/reset", {}); r.ok ? toast("All pairings removed") : toast(r.error, true); } catch (e) { toast(e.message, true); }
+  poll(true);
 }
 function haYaml() {
   return `rest:

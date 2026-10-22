@@ -53,6 +53,28 @@ earlier install, stop the service, copy `history.jsonl` and `health.jsonl` there
 
 To upgrade, install the new binary over `/usr/local/bin/wiser-dashboard` and `sudo systemctl restart wiser-dashboard`.
 
+## Google Home, Apple Home and Alexa (Matter)
+
+The dashboard has a built-in Matter bridge, so the heating shows up in Google Home, Apple Home, Alexa and
+SmartThings without Home Assistant: each room as a thermostat (temperature, target, heat/off), the hot
+water as a switch (on = 30-minute boost, off = off). Voice control, routines and Gemini work with it, and so
+does control away from home through your Google Nest speaker or display, Apple home hub or Echo.
+
+Open **Advanced → Google Home** and scan the QR code in your app (Google Home: **+ → Device → New device →
+Matter-enabled device**). Your phone and the app's hub (e.g. a Nest speaker) must be on the same network as
+the dashboard. Pairing is kept across restarts; the same page lists paired apps and can remove them.
+
+- Included in the release downloads for every platform except 32-bit Raspberry Pi OS (armv7); use the
+  64-bit OS there.
+- It uses UDP port 5540 and mDNS (UDP 5353); allow both through a firewall. `-matter-port` changes the
+  port, `-matter=false` turns the bridge off.
+- It reads and controls the hub through the dashboard's own `/data/` API with the hub secret, like Home
+  Assistant does, so it adds no load on the hub.
+- The bridge is a separate program (`matter/`, TypeScript on [matter.js](https://github.com/project-chip/matter.js),
+  compiled with Bun) packed inside the dashboard, which unpacks it next to its config and supervises it.
+  That's why release downloads are 30–40 MB.
+- It isn't Matter-certified, so apps warn about an uncertified device when pairing; that's expected.
+
 ## Home Assistant
 
 The Wiser integration reads the hub's whole state in one request (`/data/v2/domain/`), which hubs with a bad
@@ -89,12 +111,25 @@ Windows (x86-64, arm64) are on the [Releases](../../releases) page. Pick the one
 ## Build
 
 ```sh
-go build -o wiser-dashboard .   # this machine
+go build -o wiser-dashboard .   # this machine, without the Matter bridge
 ./build.sh                      # every platform into dist/
 ```
 
+With the Matter bridge (needs Node.js; Bun comes with `npm ci`):
+
+```sh
+(cd matter && npm ci && npm run build)
+mkdir -p matterbin && cp matter/dist/wiser-matter matterbin/   # wiser-matter.exe on Windows
+go build -tags matter -o wiser-dashboard .
+```
+
+After `npm ci`, `./build.sh` embeds the bridge in every platform's build too. The bridge's tests pair a
+real Matter controller with it against a mock hub: `node test/e2e.mjs dist/wiser-matter` (the bridge
+alone) and `node test/system.mjs ../wiser-dashboard` (the whole app), both run from `matter/`.
+
 GitHub Actions (`.github/workflows/ci.yml`) checks every push and pull request on Linux, macOS and
-Windows (gofmt, vet, tests, a native build), then cross-builds all platforms; the archives are kept as
+Windows (gofmt, vet, tests, a native build) and pairs a Matter controller with the bridge on each, then
+cross-builds all platforms with the bridge embedded; the archives are kept as
 workflow artifacts. To publish a release, push a version tag:
 
 ```sh

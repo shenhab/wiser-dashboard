@@ -8,3 +8,6 @@ history.jsonl
 *_secret.txt
 
 .DS_Store
+/matterbin/
+/matter/node_modules/
+/matter/dist/
