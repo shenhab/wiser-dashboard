@@ -25,13 +25,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wiser-dashboard/internal/releasekeys"
 )
 
-// Updates come from this project's GitHub releases. The SHA-256 checksums
-// published with each release are checked, and the new program must start
-// and report the expected version before it replaces the running one.
+// Updates come from this project's GitHub releases. Each release's checksum
+// list is signed (Ed25519, internal/releasekeys) and the signature must
+// verify before the checksums are trusted; the download must match them, and
+// the new program must start and report the expected version before it
+// replaces the running one.
 
 const updateEvery = 6 * time.Hour
+
+// releaseKeys are the keys release signatures must match (tests swap them).
+var releaseKeys = releasekeys.Keys
 
 // releaseBase is where releases are found; WISER_UPDATE_BASE overrides it
 // (for tests and mirrors).
@@ -334,6 +341,13 @@ func installRelease(ctx context.Context, c *http.Client, ver, exe string) error 
 	sums, err := fetch(ctx, c, releaseBase+"/download/"+ver+"/SHA256SUMS.txt")
 	if err != nil {
 		return fmt.Errorf("downloading the checksums: %w", err)
+	}
+	sig, err := fetch(ctx, c, releaseBase+"/download/"+ver+"/SHA256SUMS.txt.sig")
+	if err != nil {
+		return fmt.Errorf("release %s isn't signed (%v); not installing it", ver, err)
+	}
+	if err := releasekeys.Verify(sums, string(sig), releaseKeys); err != nil {
+		return fmt.Errorf("%w; not installing %s", err, ver)
 	}
 	want := ""
 	sc := bufio.NewScanner(bytes.NewReader(sums))

@@ -6,7 +6,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +19,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"wiser-dashboard/internal/releasekeys"
 )
 
 func TestNewerVersion(t *testing.T) {
@@ -55,9 +60,19 @@ func TestReleaseAsset(t *testing.T) {
 	}
 }
 
-// fakeRelease serves a release of a stand-in program that prints "prints"
-// for -version, the way GitHub serves releases.
-func fakeRelease(t *testing.T, tag, prints string, corrupt bool) {
+// How fakeRelease signs its checksum list.
+const (
+	signed        = "signed"
+	unsigned      = "unsigned"       // no .sig file
+	foreignKey    = "foreign key"    // signed, but not with a release key
+	tamperedSums  = "tampered sums"  // signed, then the checksums changed
+	corruptBinary = "corrupt binary" // properly signed, but the download is damaged
+)
+
+// fakeRelease serves a signed release of a stand-in program that prints
+// "prints" for -version, the way GitHub serves releases; it makes the test's
+// own key the only accepted release key.
+func fakeRelease(t *testing.T, tag, prints, mode string) {
 	t.Helper()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "main.go")
@@ -87,15 +102,33 @@ func fakeRelease(t *testing.T, tag, prints string, corrupt bool) {
 	}
 	sum := sha256.Sum256(buf.Bytes())
 	sums := hex.EncodeToString(sum[:]) + "  " + archive + "\n"
-	if corrupt {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	signer := priv
+	if mode == foreignKey {
+		_, signer, _ = ed25519.GenerateKey(rand.Reader)
+	}
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(signer, []byte(sums)))
+	if mode == tamperedSums {
+		sums += strings.Repeat("0", 64) + "  extra-file.tar.gz\n"
+	}
+	if mode == corruptBinary {
 		buf.WriteString("garbage")
 	}
+	oldKeys := releaseKeys
+	releaseKeys = []string{base64.StdEncoding.EncodeToString(pub)}
+	t.Cleanup(func() { releaseKeys = oldKeys })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/releases/latest":
 			http.Redirect(w, r, "/releases/tag/"+tag, http.StatusFound)
 		case "/releases/download/" + tag + "/SHA256SUMS.txt":
 			w.Write([]byte(sums))
+		case "/releases/download/" + tag + "/SHA256SUMS.txt.sig":
+			if mode == unsigned {
+				http.NotFound(w, r)
+				return
+			}
+			w.Write([]byte(sig + "\n"))
 		case "/releases/download/" + tag + "/" + archive:
 			w.Write(buf.Bytes())
 		default:
@@ -123,7 +156,7 @@ func TestInstallRelease(t *testing.T) {
 	ctx := context.Background()
 	c := http.DefaultClient
 
-	fakeRelease(t, "v9.9.9", "wiser-dashboard v9.9.9", false)
+	fakeRelease(t, "v9.9.9", "wiser-dashboard v9.9.9", signed)
 	if tag, err := latestRelease(ctx, c); err != nil || tag != "v9.9.9" {
 		t.Fatalf("latest: %q %v", tag, err)
 	}
@@ -138,23 +171,42 @@ func TestInstallRelease(t *testing.T) {
 		t.Errorf("leftover files: %v", left)
 	}
 
-	// A damaged download is refused and the old program stays.
-	fakeRelease(t, "v9.9.9", "wiser-dashboard v9.9.9", true)
-	exe = installedProgram(t)
-	if err := installRelease(ctx, c, "v9.9.9", exe); err == nil || !strings.Contains(err.Error(), "checksum") {
-		t.Errorf("damaged download: %v", err)
-	}
-	if b, _ := os.ReadFile(exe); string(b) != "old program" {
-		t.Error("a damaged download replaced the program")
+	// Refused, and the old program stays: a damaged download, and releases
+	// whose checksums aren't signed by a release key.
+	for _, c2 := range []struct{ mode, want string }{
+		{corruptBinary, "checksum mismatch"},
+		{unsigned, "isn't signed"},
+		{foreignKey, "doesn't match this project's signing keys"},
+		{tamperedSums, "doesn't match this project's signing keys"},
+	} {
+		fakeRelease(t, "v9.9.9", "wiser-dashboard v9.9.9", c2.mode)
+		exe = installedProgram(t)
+		if err := installRelease(ctx, c, "v9.9.9", exe); err == nil || !strings.Contains(err.Error(), c2.want) {
+			t.Errorf("%s: got %v, want an error about %q", c2.mode, err, c2.want)
+		}
+		if b, _ := os.ReadFile(exe); string(b) != "old program" {
+			t.Errorf("%s: the program was replaced", c2.mode)
+		}
 	}
 
 	// A program that doesn't report the expected version is refused.
-	fakeRelease(t, "v9.9.9", "something else", false)
+	fakeRelease(t, "v9.9.9", "something else", signed)
 	exe = installedProgram(t)
 	if err := installRelease(ctx, c, "v9.9.9", exe); err == nil || !strings.Contains(err.Error(), "didn't start correctly") {
 		t.Errorf("wrong program: %v", err)
 	}
 	if b, _ := os.ReadFile(exe); string(b) != "old program" {
 		t.Error("a wrong program replaced the old one")
+	}
+}
+
+func TestReleaseKeys(t *testing.T) {
+	if len(releasekeys.Keys) < 2 {
+		t.Fatal("want a main and a spare release key")
+	}
+	for _, k := range releasekeys.Keys {
+		if b, err := base64.StdEncoding.DecodeString(k); err != nil || len(b) != ed25519.PublicKeySize {
+			t.Errorf("release key %q isn't an Ed25519 public key", k)
+		}
 	}
 }

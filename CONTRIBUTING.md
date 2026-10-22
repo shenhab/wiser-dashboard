@@ -82,7 +82,9 @@ tested on one setup.
 ## Releases
 
 Releases are made by the maintainer by pushing a version tag on `main` (`v1.4.0`); CI then builds, tests,
-packages and publishes every platform. Contributors don't need to do anything for a release.
+packages, **signs** (`tools/sign`, with the `RELEASE_SIGNING_KEY` repository secret) and publishes every platform.
+Contributors don't need to do anything for a release. The public keys in `internal/releasekeys` must not be
+changed without the maintainer: installs only accept updates signed by them.
 
 ## Licence
 

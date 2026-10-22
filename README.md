@@ -38,7 +38,7 @@ dashboard, Home Assistant, Google Home and AI assistants, so none of them has to
 | 🗣️ **Google Home, Apple Home, Alexa** | A built-in **Matter bridge**: rooms appear as thermostats, hot water and per-room **heating boost** switches as switches. Voice control, routines, Gemini, and control away from home, without Home Assistant. |
 | 🤖 **Talk to your heating** | A built-in **MCP server** (beta), so Claude and other AI assistants can answer *"why was upstairs cold this morning?"* or *"boost the ground floor for an hour"*. |
 | 📦 **One file, everywhere** | Windows, macOS, Linux and Raspberry Pi, installed with one command. No dependencies. Hardened Linux service and a firewall helper. |
-| 🔄 **Keeps itself up to date** | Shows its version and new releases; update with one click, or opt in to automatic updates. Every update is checksum-verified. |
+| 🔄 **Keeps itself up to date** | Shows its version and new releases; update with one click, or opt in to automatic updates. Every update is **signature-verified**. |
 | 🔒 **Private by design** | Everything stays on your network. Separate secrets for each kind of access, an optional dashboard password, and no cloud. |
 
 ## Screenshots
@@ -160,8 +160,13 @@ The version is always shown at the top of the page. The dashboard checks GitHub 
 and shows **Update available** when there is one. Under **Advanced → System → Updates** you can see what's
 new, click **Update now**, or opt in to **Install updates automatically** (off by default).
 
-An update downloads the release for your system, checks its SHA-256 checksum, makes sure the new program starts
-and reports the right version, and only then replaces the old one and restarts. Settings, history, pairings and
+Releases are **signed**: CI signs each release's `SHA256SUMS.txt` with the project's Ed25519 key, kept only as
+a GitHub secret, and the program has the public keys built in (`internal/releasekeys`, a main key and a spare
+for rotation). An update downloads the release for your system, **refuses it unless the signature verifies**,
+checks the download against the signed checksums, makes sure the new program starts and reports the right
+version, and only then replaces the old one and restarts. Even someone who took over the GitHub account or the
+download path couldn't push an update without the private key. The install command checks the signature too
+where OpenSSL 3 is available (most Linux). Settings, history, pairings and
 tokens stay. Installs made with the install command update themselves:
 
 - **Linux service:** the service is locked down and can't change its own program, so a small root helper
@@ -327,7 +332,7 @@ Honest notes on what it doesn't do yet, with the way forward for each.
 | **Matter on Android** sometimes fails to pair ("Something went wrong") because of an Android bug; pairing once from an iPhone or iPad works around it. Matter needs the phone, the dashboard and the smart-speaker hub on the same network, with mDNS. | Better diagnostics on the Google Home page for network problems. |
 | **No Matter on 32-bit Raspberry Pi OS** (armv7): Bun, which runs the bridge, doesn't support it. | Use the 64-bit OS; or a native Go Matter implementation (weeks of work). |
 | **Downloads are 30–40 MB**, because the bridge carries its own JavaScript runtime. | A native Go Matter bridge would bring them back to ~8 MB. |
-| **Updates are verified with the checksums published in the same GitHub release.** That catches damaged or altered downloads, but not someone who took over the GitHub account. | Signed releases (e.g. minisign or Sigstore), with the public key built into the program. |
+| **The first install trusts GitHub over HTTPS.** Every update after it is signature-checked by the program, but the install command can only check the signature with OpenSSL 3 (most Linux), not on macOS or Windows; and updating *to* the first signed release from an older one relies on its checksums. | Verifying the first download with a key you get separately (e.g. from the README on a fork you trust). |
 | **Unsigned programs**: macOS Gatekeeper and Windows SmartScreen warn on first start. | Code signing (Apple Developer ID, a Windows signing certificate) in the release pipeline. |
 | **History starts when the dashboard starts** and covers 14 days; nothing is kept while it isn't running. | Longer retention or export to a time-series database. |
 | **No app icon or background mode**: it's a program you leave running (or a Linux service). | A macOS app bundle, a Windows tray icon and a "start at login" option; an installable web app for phones. |
