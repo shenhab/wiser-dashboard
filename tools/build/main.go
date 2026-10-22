@@ -190,12 +190,29 @@ func matterReady(mode string) (bool, error) {
 	}
 	installed, err := os.Stat(filepath.Join("matter", "node_modules", ".package-lock.json"))
 	if err != nil || installed.ModTime().Before(lock.ModTime()) {
-		fmt.Println("Installing the Matter bridge's dependencies (npm ci)...")
-		if err := runIn("matter", nil, "npm", "ci", "--no-audit", "--no-fund"); err != nil {
-			return false, fmt.Errorf("npm ci: %w", err)
+		if err := npmInstall("Installing the Matter bridge's dependencies (npm ci)..."); err != nil {
+			return false, err
+		}
+	}
+	// node_modules copied from another computer holds that system's Bun, which
+	// can't run here ("Exec format error"): reinstall for this one.
+	if runIn("matter", nil, "npx", "bun", "--version") != nil {
+		if err := npmInstall("The Matter bridge's dependencies are for another system or broken; reinstalling (npm ci)..."); err != nil {
+			return false, err
+		}
+		if err := runIn("matter", nil, "npx", "bun", "--version"); err != nil {
+			return false, fmt.Errorf("bun still doesn't run after reinstalling: %w", err)
 		}
 	}
 	return true, nil
+}
+
+func npmInstall(msg string) error {
+	fmt.Println(msg)
+	if err := runIn("matter", nil, "npm", "ci", "--no-audit", "--no-fund"); err != nil {
+		return fmt.Errorf("npm ci: %w", err)
+	}
+	return nil
 }
 
 // bunTarget is Bun's name for a platform, or "" where Bun has no build.
