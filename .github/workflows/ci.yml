@@ -138,6 +138,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: wiser-dashboard-* # only the release archives
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
