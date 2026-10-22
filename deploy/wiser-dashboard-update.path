@@ -1,0 +1,13 @@
+# Installs Wiser Dashboard updates for the locked-down service, which can't
+# replace its own program: when the dashboard asks (Update now, or automatic
+# updates) it creates update-requested in its state folder, and this starts
+# wiser-dashboard-update.service. install.sh sets both up.
+
+[Unit]
+Description=Watch for Wiser Dashboard update requests
+
+[Path]
+PathExists=/var/lib/wiser-dashboard/update-requested
+
+[Install]
+WantedBy=multi-user.target

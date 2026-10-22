@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -24,6 +26,10 @@ var version = "dev"
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
 		runMCPStdio(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "self-update" {
+		runSelfUpdate(os.Args[2:])
 		return
 	}
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -44,6 +50,9 @@ func main() {
 		return
 	}
 	log.Printf("wiser-dashboard %s", version)
+	if exe, err := os.Executable(); err == nil && runtime.GOOS == "windows" {
+		os.Remove(exe + ".old") // left by the last update
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -71,6 +80,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// An update stops everything cleanly, then starts the new program.
+	ctx, shutdown := context.WithCancel(ctx)
+	var restarting atomic.Bool
 
 	hub := NewHub()
 	store := NewStore()
@@ -80,6 +92,12 @@ func main() {
 	srv := &Server{hub: hub, store: store, poller: poller, history: history, health: health, configPath: *configPath, password: *password, listen: *listen,
 		labels: cfg.ChannelNames, alertSettings: cfg.Alerts}
 	srv.boost = cfg.Boost.withDefaults()
+	srv.autoUpdate = cfg.AutoUpdate
+	srv.updater = NewUpdater(filepath.Dir(*configPath), func() { restarting.Store(true); shutdown() }, func() bool {
+		srv.mu.Lock()
+		defer srv.mu.Unlock()
+		return srv.autoUpdate
+	})
 	srv.mcpOff = !*mcpOn
 	srv.mcpToken = cfg.MCPToken
 	if srv.mcpToken == "" {
@@ -100,6 +118,7 @@ func main() {
 	go history.Run(ctx, store)
 	go health.Run(ctx, store, hub)
 	go bootstrap(ctx, srv, cfg, !*noDiscover)
+	go srv.updater.Run(ctx)
 	var bg sync.WaitGroup
 	if srv.matter != nil {
 		bg.Add(1)
@@ -118,6 +137,11 @@ func main() {
 		log.Fatal(err)
 	}
 	bg.Wait() // let the Matter bridge save its state and stop
+	if restarting.Load() {
+		if err := relaunch(srv.updater.exe); err != nil {
+			log.Fatalf("starting the updated program: %v (start it again by hand)", err)
+		}
+	}
 }
 
 // bootstrap fills in whatever is missing: it finds the hub, then tries to

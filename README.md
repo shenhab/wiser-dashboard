@@ -37,7 +37,8 @@ dashboard, Home Assistant, Google Home and AI assistants, so none of them has to
 | 🔌 **Home Assistant, made reliable** | A drop-in, hub-compatible API that answers Home Assistant from the cache instantly, even when the hub's Wi-Fi is poor. |
 | 🗣️ **Google Home, Apple Home, Alexa** | A built-in **Matter bridge**: rooms appear as thermostats, hot water and per-room **heating boost** switches as switches. Voice control, routines, Gemini, and control away from home, without Home Assistant. |
 | 🤖 **Talk to your heating** | A built-in **MCP server** (beta), so Claude and other AI assistants can answer *"why was upstairs cold this morning?"* or *"boost the ground floor for an hour"*. |
-| 📦 **One file, everywhere** | Windows, macOS, Linux and Raspberry Pi. No installer, no dependencies. Optional hardened Linux service and a firewall helper. |
+| 📦 **One file, everywhere** | Windows, macOS, Linux and Raspberry Pi, installed with one command. No dependencies. Hardened Linux service and a firewall helper. |
+| 🔄 **Keeps itself up to date** | Shows its version and new releases; update with one click, or opt in to automatic updates. Every update is checksum-verified. |
 | 🔒 **Private by design** | Everything stays on your network. Separate secrets for each kind of access, an optional dashboard password, and no cloud. |
 
 ## Screenshots
@@ -152,6 +153,22 @@ claude mcp add --transport http wiser http://<this-machine>:8080/mcp --header "A
 Apps that only start local MCP servers (like Claude Desktop) run the same program as a relay:
 `wiser-dashboard mcp -url http://<this-machine>:8080/mcp`, with the token in `WISER_MCP_TOKEN`. `-mcp=false`
 turns the MCP server off.
+
+### Updates
+
+The version is always shown at the top of the page. The dashboard checks GitHub for a new release every 6 hours
+and shows **Update available** when there is one. Under **Advanced → System → Updates** you can see what's
+new, click **Update now**, or opt in to **Install updates automatically** (off by default).
+
+An update downloads the release for your system, checks its SHA-256 checksum, makes sure the new program starts
+and reports the right version, and only then replaces the old one and restarts. Settings, history, pairings and
+tokens stay. Installs made with the install command update themselves:
+
+- **Linux service:** the service is locked down and can't change its own program, so a small root helper
+  (`wiser-dashboard-update.path` / `.service`, set up by the installer) installs the update and restarts it.
+- **macOS, Windows and per-user installs:** the dashboard replaces its own program and restarts.
+- **Other installs** (e.g. a service set up by hand without the helper): the page shows the install command,
+  which upgrades in place.
 
 ### Easy to run, built properly
 
@@ -310,6 +327,7 @@ Honest notes on what it doesn't do yet, with the way forward for each.
 | **Matter on Android** sometimes fails to pair ("Something went wrong") because of an Android bug; pairing once from an iPhone or iPad works around it. Matter needs the phone, the dashboard and the smart-speaker hub on the same network, with mDNS. | Better diagnostics on the Google Home page for network problems. |
 | **No Matter on 32-bit Raspberry Pi OS** (armv7): Bun, which runs the bridge, doesn't support it. | Use the 64-bit OS; or a native Go Matter implementation (weeks of work). |
 | **Downloads are 30–40 MB**, because the bridge carries its own JavaScript runtime. | A native Go Matter bridge would bring them back to ~8 MB. |
+| **Updates are verified with the checksums published in the same GitHub release.** That catches damaged or altered downloads, but not someone who took over the GitHub account. | Signed releases (e.g. minisign or Sigstore), with the public key built into the program. |
 | **Unsigned programs**: macOS Gatekeeper and Windows SmartScreen warn on first start. | Code signing (Apple Developer ID, a Windows signing certificate) in the release pipeline. |
 | **History starts when the dashboard starts** and covers 14 days; nothing is kept while it isn't running. | Longer retention or export to a time-series database. |
 | **No app icon or background mode**: it's a program you leave running (or a Linux service). | A macOS app bundle, a Windows tray icon and a "start at login" option; an installable web app for phones. |

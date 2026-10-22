@@ -286,7 +286,9 @@ func packageBuild(bin, goos, goarch, version string) (string, error) {
 	if goos == "linux" {
 		files = append(files,
 			struct{ src, dst string }{filepath.Join("deploy", "wiser-dashboard.service"), "wiser-dashboard.service"},
-			struct{ src, dst string }{filepath.Join("deploy", "open-firewall.sh"), "open-firewall.sh"})
+			struct{ src, dst string }{filepath.Join("deploy", "open-firewall.sh"), "open-firewall.sh"},
+			struct{ src, dst string }{filepath.Join("deploy", "wiser-dashboard-update.path"), "wiser-dashboard-update.path"},
+			struct{ src, dst string }{filepath.Join("deploy", "wiser-dashboard-update.service"), "wiser-dashboard-update.service"})
 	}
 	if err := os.MkdirAll("dist", 0o755); err != nil {
 		return "", err
