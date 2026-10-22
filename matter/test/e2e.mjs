@@ -48,6 +48,10 @@ const domain = {
 };
 const patches = [];
 let unauthorized = 0;
+// A slow hub: readings are captured when asked and answered later, like a real
+// hub's would be, so a reply can arrive after a command with the old state.
+let readDelay = 0;
+let readsInFlight = 0;
 const mock = createServer((req, res) => {
     if (req.headers.secret !== SECRET) {
         unauthorized++;
@@ -58,7 +62,12 @@ const mock = createServer((req, res) => {
     req.on("data", c => (body += c));
     req.on("end", () => {
         if (req.method === "GET" && req.url === "/data/domain/") {
-            res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(domain));
+            const reading = JSON.stringify(domain);
+            readsInFlight++;
+            setTimeout(() => {
+                readsInFlight--;
+                res.writeHead(200, { "Content-Type": "application/json" }).end(reading);
+            }, readDelay);
             return;
         }
         const m = req.url.match(/^\/data\/domain\/(Room|HotWater)\/(\d+)$/);
@@ -222,6 +231,29 @@ patches.length = 0;
 await hwOnOff.off();
 p = await until(() => patches.find(x => x.path === "/data/domain/HotWater/2"));
 check("hot water off", p?.data.RequestOverride.SetPoint === -200, JSON.stringify(p?.data));
+
+// Saying "on" again while it's on restarts the boost (the command counts, not the state).
+await hwOnOff.on();
+await until(() => patches.some(x => x.path === "/data/domain/HotWater/2" && x.data.RequestOverride.SetPoint === 1100));
+patches.length = 0;
+await hwOnOff.on();
+p = await until(() => patches.find(x => x.path === "/data/domain/HotWater/2"));
+check("hot water on again restarts the boost", p?.data.RequestOverride.DurationMinutes === 30, JSON.stringify(p?.data));
+
+// On then straight away off, while a slow hub reading taken before both is on its way:
+// the old reading must not undo the "on", or the "off" would be lost.
+readDelay = 3000;
+for (let i = 0; i < 3; i++) {
+    await until(() => readsInFlight > 0, 15_000);
+    patches.length = 0;
+    await hwOnOff.on();
+    await hwOnOff.off();
+    await until(() => patches.filter(x => x.path === "/data/domain/HotWater/2").length >= 2, 15_000);
+    const sent = patches.filter(x => x.path === "/data/domain/HotWater/2").map(x => x.data.RequestOverride.SetPoint);
+    check(`on then off during a slow hub reading reaches the hub (try ${i + 1})`, JSON.stringify(sent) === "[1100,-200]", JSON.stringify(sent));
+    await sleep(4_000);
+}
+readDelay = 0;
 
 // Heating boost switches: on = current temperature + 3° for 30 min, off = back to schedule.
 const gBoost = groundBoost.getClusterClient(OnOff.Cluster);
