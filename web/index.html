@@ -323,7 +323,8 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const deg = v => v == null ? "–" : v <= OFF ? "Off" : (v / 10).toFixed(1) + "°";
 const sec = n => S.state?.sections?.[n]?.data;
 const hhmm = d => d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-const dur = m => m < 1 ? "0m" : m < 60 ? Math.round(m) + "m" : Math.floor(m / 60) + "h" + (Math.round(m % 60) ? " " + Math.round(m % 60) + "m" : "");
+// Round first, so 119.6 minutes is "2h", not "1h 60m".
+const dur = m => { m = Math.round(m); return m < 1 ? "0m" : m < 60 ? m + "m" : Math.floor(m / 60) + "h" + (m % 60 ? " " + m % 60 + "m" : ""); };
 const ago = t => { if (!t) return "never"; const s = Math.round((Date.now() - new Date(t)) / 1000); return s < 8 ? "just now" : s < 90 ? s + "s ago" : Math.round(s / 60) + "m ago"; };
 const isHeating = r => r.PercentageDemand > 0 || r.ControlOutputState === "On";
 const chName = c => S.state?.channelNames?.[c.id] || c.Name || "Zone " + c.id;
