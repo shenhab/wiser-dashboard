@@ -86,5 +86,5 @@ packages and publishes every platform. Contributors don't need to do anything fo
 
 ## Licence
 
-The project doesn't have a licence yet. Until it does, by opening a pull request you agree that your contribution
-may be used in this project under whatever licence the maintainer chooses for it.
+The project is under the [MIT licence](LICENSE). By opening a pull request you agree that your contribution is
+licensed under it too.

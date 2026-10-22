@@ -11,6 +11,8 @@ home.
 
 > Download, double-click, open `http://localhost:8080`. It finds your hub by itself.
 
+![The dashboard's home page: three rooms with their temperatures and targets, quick actions, and today's heating time and boiler starts](docs/screenshots/home.jpg)
+
 ---
 
 ## Why
@@ -34,9 +36,19 @@ dashboard, Home Assistant, Google Home and AI assistants, so none of them has to
 | 🩺 **Hub health** | The hub's Wi-Fi signal, retransmissions, drops and restarts, logged over time, so you can see when the problem is the network, not the heating. |
 | 🔌 **Home Assistant, made reliable** | A drop-in, hub-compatible API that answers Home Assistant from the cache instantly, even when the hub's Wi-Fi is poor. |
 | 🗣️ **Google Home, Apple Home, Alexa** | A built-in **Matter bridge**: rooms appear as thermostats, hot water and per-room **heating boost** switches as switches. Voice control, routines, Gemini, and control away from home, without Home Assistant. |
-| 🤖 **Talk to your heating** | A built-in **MCP server**, so Claude and other AI assistants can answer *"why was upstairs cold this morning?"* or *"boost the ground floor for an hour"*. |
+| 🤖 **Talk to your heating** | A built-in **MCP server** (beta), so Claude and other AI assistants can answer *"why was upstairs cold this morning?"* or *"boost the ground floor for an hour"*. |
 | 📦 **One file, everywhere** | Windows, macOS, Linux and Raspberry Pi. No installer, no dependencies. Optional hardened Linux service and a firewall helper. |
 | 🔒 **Private by design** | Everything stays on your network. Separate secrets for each kind of access, an optional dashboard password, and no cloud. |
+
+## Screenshots
+
+| | |
+|---|---|
+| ![A room's detail panel with its 24-hour temperature chart, warm-up speed and settings](docs/screenshots/room.jpg) **A room in detail**: history, warm-up speed, "ready at" estimate and settings | ![Insights page with temperature charts per room, heating time per day and boiler starts](docs/screenshots/insights.jpg) **Insights**: temperatures, heating time per day and boiler starts |
+| ![Weekly heating and hot water schedules shown as coloured bars per day](docs/screenshots/schedules.jpg) **Schedules**: every heating and hot water schedule at a glance, with an editor | ![Google Home page with the Matter pairing QR code and the devices your apps will see](docs/screenshots/google-home.jpg) **Google Home, Apple Home, Alexa**: pair with a QR code |
+| ![AI assistants page with the MCP address, a masked token and setup for Claude Code and Claude Desktop](docs/screenshots/ai-assistants.jpg) **AI assistants**: ready-made setup for Claude Code and Claude Desktop | |
+
+*Screenshots use demo data.*
 
 ---
 
@@ -116,8 +128,9 @@ A built-in Matter bridge puts your heating into the smart-home apps directly, **
 - The bridge (`matter/`, TypeScript on [matter.js](https://github.com/project-chip/matter.js), compiled with Bun)
   is packed inside the dashboard, which unpacks and supervises it. That's why downloads are 30–40 MB.
 
-### AI assistants (MCP)
+### AI assistants (MCP, beta)
 
+The MCP server is new and still in beta: it works and is tested, but its tools may change as people use it.
 The dashboard is an [MCP](https://modelcontextprotocol.io) server at `http://<this-machine>:8080/mcp`, so
 Claude and other AI assistants can read and control the heating with real data:
 
@@ -274,7 +287,6 @@ Honest notes on what it doesn't do yet, with the way forward for each.
 | **Unsigned programs**: macOS Gatekeeper and Windows SmartScreen warn on first start. | Code signing (Apple Developer ID, a Windows signing certificate) in the release pipeline. |
 | **History starts when the dashboard starts** and covers 14 days; nothing is kept while it isn't running. | Longer retention or export to a time-series database. |
 | **No app icon or background mode**: it's a program you leave running (or a Linux service). | A macOS app bundle, a Windows tray icon and a "start at login" option; an installable web app for phones. |
-| **No licence yet**, so others may read the code but have no explicit right to use or change it. | The author choosing an open-source licence (e.g. MIT or Apache-2.0). |
 
 ---
 
@@ -287,6 +299,8 @@ and the documentation.
 
 Built on [matter.js](https://github.com/project-chip/matter.js) (Apache-2.0) and [Bun](https://bun.sh) for the
 Matter bridge; everything else is Go's standard library.
+
+**Licence:** [MIT](LICENSE). Use it, change it and share it freely; keep the copyright notice.
 
 *Wiser, Drayton and Schneider Electric are trademarks of their owners. This is an independent project, not
 affiliated with or endorsed by them. It controls real heating equipment: use it with care.*
