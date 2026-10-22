@@ -57,9 +57,24 @@ The dashboard password (`-password`) doesn't apply to `/data/`.
 - Responses over ~2.7 KB stall (the hub retransmits most TCP segments), so `/data/domain/` is never fetched whole;
   sections are polled individually.
 
+## Download
+
+Ready-made builds for Linux (x86-64, arm64, Raspberry Pi armv7), macOS (Intel, Apple silicon) and
+Windows (x86-64, arm64) are on the [Releases](../../releases) page. Pick the one matching `uname -m`
+(`x86_64` → amd64, `aarch64` → arm64, `armv7l` → armv7), unpack it and run `./wiser-dashboard`.
+`./wiser-dashboard -version` shows which build you have.
+
 ## Build
 
 ```sh
 go build -o wiser-dashboard .   # this machine
-./build.sh                      # macOS, Linux (x86, arm64, Raspberry Pi), Windows into dist/
+./build.sh                      # every platform into dist/
+```
+
+GitHub Actions (`.github/workflows/ci.yml`) checks every push and pull request on Linux, macOS and
+Windows (gofmt, vet, tests, a native build), then cross-builds all platforms; the archives are kept as
+workflow artifacts. To publish a release, push a version tag:
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0   # a tag with a dash, like v1.1.0-rc1, is marked pre-release
 ```

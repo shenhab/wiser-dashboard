@@ -17,7 +17,11 @@ import (
 	"time"
 )
 
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	listen := flag.String("listen", ":8080", "address the dashboard listens on")
 	hubIP := flag.String("hub", "", "hub IP address (skips discovery)")
 	secret := flag.String("secret", "", "hub secret")
@@ -26,6 +30,11 @@ func main() {
 	password := flag.String("password", "", "require this password (HTTP basic auth, any username) to open the dashboard")
 	noDiscover := flag.Bool("no-discover", false, "do not scan the network for the hub at startup")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("wiser-dashboard", version)
+		return
+	}
+	log.Printf("wiser-dashboard %s", version)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {

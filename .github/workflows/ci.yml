@@ -1,0 +1,122 @@
+name: CI
+
+# Every push and pull request is checked and built for all platforms; the
+# binaries are kept as workflow artifacts. Pushing a tag like v1.2.0 also
+# publishes them as a GitHub release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -race ./...
+        if: runner.os != 'Windows'
+      - run: go test ./...
+        if: runner.os == 'Windows'
+      - name: Build and run natively
+        shell: bash
+        run: |
+          go build -o wiser-dashboard-smoke .
+          ./wiser-dashboard-smoke -version
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: arm, goarm: "7" }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # for git describe
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          version=$(git describe --tags --always --dirty)
+          name="wiser-dashboard-$version-$GOOS-$GOARCH"
+          [ "$GOARCH" = arm ] && name="${name}v$GOARM"
+          bin=wiser-dashboard
+          [ "$GOOS" = windows ] && bin=wiser-dashboard.exe
+
+          mkdir -p "pkg/$name" dist
+          go build -trimpath -ldflags="-s -w -X main.version=$version" -o "pkg/$name/$bin" .
+          cp README.md "pkg/$name/"
+          cd pkg
+          if [ "$GOOS" = windows ]; then
+            zip -qr "../dist/$name.zip" "$name"
+          else
+            tar -czf "../dist/$name.tar.gz" "$name"
+          fi
+          echo "NAME=$name" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          flags="--generate-notes --verify-tag"
+          case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" $flags dist/*
