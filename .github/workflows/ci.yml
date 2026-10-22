@@ -26,10 +26,13 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      # Current Go, not go.mod's minimum: recent macOS won't run binaries
+      # from older toolchains ("missing LC_UUID load command").
+      - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
+          cache: false # no dependencies to cache
       - name: gofmt
         if: runner.os == 'Linux'
         run: |
@@ -63,12 +66,13 @@ jobs:
           - { goos: windows, goarch: amd64 }
           - { goos: windows, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # for git describe
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
+          cache: false
       - name: Build
         env:
           CGO_ENABLED: "0"
@@ -92,7 +96,7 @@ jobs:
             tar -czf "../dist/$name.tar.gz" "$name"
           fi
           echo "NAME=$name" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.NAME }}
           path: dist/*
@@ -106,7 +110,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
