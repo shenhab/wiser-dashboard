@@ -127,6 +127,49 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
+  # The one-line installers, run the way users run them, against the latest
+  # release: install, check it answers, run again (upgrade), uninstall.
+  install-test:
+    name: Installer (${{ matrix.os }})
+    if: "!startsWith(github.ref, 'refs/tags/')"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install, upgrade and uninstall (install.sh)
+        if: runner.os != 'Windows'
+        run: |
+          set -e
+          cat install.sh | sh
+          curl -fsS -o /dev/null http://127.0.0.1:8080/api/state
+          if [ "$RUNNER_OS" = Linux ]; then
+            systemctl is-active wiser-dashboard
+            test "$(systemctl show -p NRestarts --value wiser-dashboard)" = 0
+          fi
+          cat install.sh | sh                       # upgrade in place
+          curl -fsS -o /dev/null http://127.0.0.1:8080/api/state
+          cat install.sh | sh -s -- --uninstall --purge
+          sleep 3
+          ! curl -fsS -o /dev/null http://127.0.0.1:8080/api/state
+      - name: Install, upgrade and uninstall (install.ps1)
+        if: runner.os == 'Windows'
+        shell: powershell # Windows PowerShell 5.1, what most people have
+        run: |
+          Get-Content -Raw install.ps1 | Invoke-Expression
+          Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8080/api/state | Out-Null
+          if (-not (Test-Path "$([Environment]::GetFolderPath('Startup'))\Wiser Dashboard.lnk")) { throw 'no startup shortcut' }
+          if (-not (Get-NetFirewallRule -DisplayName 'Wiser Dashboard' -ErrorAction SilentlyContinue)) { throw 'no firewall rule' }
+          Get-Content -Raw install.ps1 | Invoke-Expression   # upgrade in place
+          Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8080/api/state | Out-Null
+          $env:WISER_UNINSTALL = '1'
+          Get-Content -Raw install.ps1 | Invoke-Expression
+          Start-Sleep -Seconds 3
+          $up = $true; try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 http://127.0.0.1:8080/api/state | Out-Null } catch { $up = $false }
+          if ($up) { throw 'still running after uninstall' }
+
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')

@@ -57,7 +57,10 @@ func main() {
 		if err != nil {
 			log.Fatalf("reading secret file: %v", err)
 		}
-		cfg.Secret = strings.TrimSpace(string(b))
+		// An empty file leaves the secret saved from the setup page in place.
+		if s := strings.TrimSpace(string(b)); s != "" {
+			cfg.Secret = s
+		}
 	}
 	if *secret != "" {
 		cfg.Secret = *secret
