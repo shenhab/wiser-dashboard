@@ -165,6 +165,14 @@ check("the bridge drops Upper Floor's boost switch", !!fewer, `${devicesBefore} 
 const bad = await (await fetch(`http://${DASH}/api/matter/boost`, { method: "POST", body: JSON.stringify({ minutes: 1000, delta: 20 }) })).json();
 check("out-of-range settings are refused", bad.ok === false);
 
+// The waste guard: turning it on adds the Heating alert sensor, off removes it.
+const guardPost = async body => (await fetch(`http://${DASH}/api/guard/settings`, { method: "POST", body: JSON.stringify(body) })).json();
+const withoutAlert = (await api("/api/matter")).status.devices;
+check("waste guard settings are accepted", (await guardPost({ mode: "watch" })).ok === true);
+check("the waste guard adds the Heating alert to the bridge", !!(await until(async () => (await api("/api/matter")).status.devices === withoutAlert + 1, 30_000)));
+await guardPost({ mode: "" });
+check("turning the waste guard off removes it", !!(await until(async () => (await api("/api/matter")).status.devices === withoutAlert, 30_000)));
+
 // ---------------------------------------------------------------- restart the whole app
 let exit = await stopApp(app);
 check("dashboard stops cleanly with the bridge", exit === 0, `exit ${exit}`);

@@ -5,7 +5,7 @@
 //
 //   node test/e2e.mjs path/to/wiser-matter
 import { Environment, Logger, LogLevel } from "@matter/main";
-import { BridgedDeviceBasicInformation, GeneralCommissioning, OnOff, Thermostat } from "@matter/main/clusters";
+import { BooleanState, BridgedDeviceBasicInformation, GeneralCommissioning, OnOff, Thermostat } from "@matter/main/clusters";
 import { ManualPairingCodeCodec } from "@matter/main/types";
 import { CommissioningController } from "@project-chip/matter.js";
 import { spawn } from "node:child_process";
@@ -73,7 +73,7 @@ const mock = createServer((req, res) => {
         const m = req.url.match(/^\/data\/domain\/(Room|HotWater)\/(\d+)$/);
         if (req.method === "PATCH" && m) {
             const data = JSON.parse(body);
-            patches.push({ path: req.url, data });
+            patches.push({ path: req.url, data, client: req.headers["x-wiser-client"] });
             const item = domain[m[1]].find(x => x.id === Number(m[2]));
             const ov = data.RequestOverride;
             if (m[1] === "Room" && ov.Type === "None") {
@@ -165,9 +165,8 @@ await until(() => node.initialized, 30_000);
 const paired = await until(() => statuses.findLast(s => s.commissioned && s.fabrics?.length), 10_000);
 check("bridge reports it is paired", !!paired, paired && `fabric "${paired.fabrics[0].label}"`);
 
-const devices = node.getDevices().flatMap(d => [d, ...d.getChildEndpoints()]);
 async function byName(name) {
-    for (const d of devices) {
+    for (const d of node.getDevices().flatMap(d => [d, ...d.getChildEndpoints()])) {
         const info = d.getClusterClient(BridgedDeviceBasicInformation.Cluster);
         if (info && (await info.getNodeLabelAttribute()) === name) return d;
     }
@@ -301,6 +300,19 @@ check("new settings apply: +2° for 60 min", p?.data.RequestOverride.DurationMin
 bridge.stdin.write(JSON.stringify({ boost: { minutes: 30, delta: 30, off: {} } }) + "\n");
 const back = await until(() => statuses.findLast(s => s.devices === 5), 20_000);
 check("turning it back on brings the switch back", !!back);
+
+check("the bridge marks its requests for the waste guard", patches.every(x => x.client === "matter"), JSON.stringify(patches.map(x => x.client)));
+
+// The waste guard's Heating alert: a contact sensor, closed normally, open on an alert.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: false } }) + "\n");
+check("turning the waste guard on adds the Heating alert", !!(await until(() => statuses.findLast(s => s.devices === 6), 20_000)));
+const alertDev = await until(() => byName("Heating alert"), 30_000);
+const alertState = alertDev?.getClusterClient(BooleanState.Cluster);
+check("Heating alert reads closed with no alert", !!alertState && (await alertState.getStateValueAttribute(true)) === true);
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true } }) + "\n");
+check("an alert opens the Heating alert", !!(await until(async () => (await alertState?.getStateValueAttribute(true)) === false, 20_000)));
+bridge.stdin.write(JSON.stringify({ alert: { enabled: false, on: false } }) + "\n");
+check("turning the waste guard off removes the Heating alert", !!(await until(() => statuses.findLast(s => s.devices === 5), 20_000)));
 
 // Changes on the hub side reach the controller (held values settle after 20 s).
 domain.Room[0].CalculatedTemperature = 230;

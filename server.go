@@ -27,6 +27,7 @@ type Server struct {
 	password   string
 	listen     string
 	matter     *Matter
+	guard      *Guard
 
 	mu            sync.Mutex
 	labels        map[string]string // heating channel id -> display name
@@ -55,6 +56,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/alerts", s.handleAlerts)
 	mux.HandleFunc("POST /api/settings", s.handleSettings)
+	mux.HandleFunc("GET /api/guard", s.handleGuard)
+	mux.HandleFunc("POST /api/guard/settings", s.handleGuardSettings)
+	mux.HandleFunc("POST /api/guard/keep", s.handleGuardKeep)
 	mux.HandleFunc("GET /api/matter", s.handleMatter)
 	mux.HandleFunc("POST /api/matter/reset", s.handleMatterReset)
 	mux.HandleFunc("POST /api/matter/boost", s.handleMatterBoost)
@@ -135,6 +139,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		"sections":     s.store.Snapshot(),
 		"extras":       s.poller.Extras(),
 		"matter":       s.matter.State(),
+		"guard":        s.guard.State(),
 		"version":      version,
 		"update":       s.updater.State(),
 		"now":          time.Now(),
@@ -176,7 +181,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if len(body) == 0 && len(req.Body) > 0 && string(req.Body) != "null" {
 		body = req.Body
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(withSource(r.Context(), "dashboard"), 90*time.Second)
 	defer cancel()
 	res := s.forward(ctx, req.Method, req.Path, body)
 
@@ -199,6 +204,9 @@ func (s *Server) forward(ctx context.Context, method, path string, body []byte) 
 		sec := sectionFor(path)
 		if method == "PATCH" {
 			sec = s.store.MergeWrite(path, res.Body)
+			if src := sourceOf(ctx); src != "" && src != "guard" {
+				s.guard.noteOwn(path, body)
+			}
 		}
 		if sec != "" {
 			s.poller.Refresh(sec)
@@ -393,8 +401,9 @@ func (s *Server) save(ip, secret string) error {
 	if s.configPath == "" {
 		return nil
 	}
+	guard := s.guard.Settings()
 	s.mu.Lock()
-	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost, MCPToken: s.mcpToken, AutoUpdate: s.autoUpdate}
+	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost, Guard: guard, MCPToken: s.mcpToken, AutoUpdate: s.autoUpdate}
 	err := saveConfig(s.configPath, cfg)
 	s.mu.Unlock()
 	return err

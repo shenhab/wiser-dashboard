@@ -7,6 +7,8 @@ config.json
 history.jsonl
 health.jsonl
 hub-data.json
+guard.json
+guard.jsonl
 *_secret.txt
 
 .DS_Store

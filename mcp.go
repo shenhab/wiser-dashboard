@@ -379,7 +379,7 @@ func (s *Server) patchHub(ctx context.Context, path string, body any) error {
 		return errors.New("the dashboard isn't connected to a hub yet")
 	}
 	b, _ := json.Marshal(body)
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(withSource(ctx, "assistant"), 60*time.Second)
 	defer cancel()
 	res := s.forward(ctx, "PATCH", path, b)
 	if res.Err != nil {

@@ -34,6 +34,9 @@ var alertKinds = []struct{ Kind, Label string }{
 	{"pending", "Change not reaching a thermostat"},
 	{"away", "Away mode on"},
 	{"schedule-empty", "Room schedule is off all week"},
+	{"guard-returned", "Waste guard returned a room or the hot water to its schedule"},
+	{"schedule-long", "A schedule keeps heating on too long (waste guard)"},
+	{"heating-24h", "Too much heating in 24 hours (waste guard)"},
 }
 
 type Alert struct {
@@ -41,6 +44,7 @@ type Alert struct {
 	Level  string `json:"level"` // "critical", "warning" or "info"
 	Title  string `json:"title"`
 	Detail string `json:"detail,omitempty"`
+	Figure string `json:"figure,omitempty"` // a number to show large, e.g. "14 h 20 min"
 }
 
 var levelRank = map[string]int{"critical": 0, "warning": 1, "info": 2}
@@ -196,6 +200,12 @@ func (s *Server) alerts() []Alert {
 			if empty[r.ScheduleId] {
 				add("schedule-empty", "info", r.Name+" has no heating scheduled", "It only heats when you boost or set a temperature.")
 			}
+		}
+	}
+
+	for _, a := range s.guard.Alerts() {
+		if !set.Off[a.Kind] {
+			out = append(out, a)
 		}
 	}
 

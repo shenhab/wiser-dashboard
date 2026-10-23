@@ -92,6 +92,7 @@ func main() {
 	srv := &Server{hub: hub, store: store, poller: poller, history: history, health: health, configPath: *configPath, password: *password, listen: *listen,
 		labels: cfg.ChannelNames, alertSettings: cfg.Alerts}
 	srv.boost = cfg.Boost.withDefaults()
+	srv.guard = NewGuard(srv, filepath.Dir(*configPath), cfg.Guard)
 	srv.autoUpdate = cfg.AutoUpdate
 	srv.updater = NewUpdater(filepath.Dir(*configPath), func() { restarting.Store(true); shutdown() }, func() bool {
 		srv.mu.Lock()
@@ -124,6 +125,7 @@ func main() {
 	go poller.Run(ctx)
 	go history.Run(ctx, store)
 	go health.Run(ctx, store, hub)
+	go srv.guard.Run(ctx)
 	go bootstrap(ctx, srv, cfg, !*noDiscover)
 	go srv.updater.Run(ctx)
 	var bg sync.WaitGroup

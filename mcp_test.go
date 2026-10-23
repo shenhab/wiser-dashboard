@@ -65,8 +65,18 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if ov, ok := body["RequestOverride"].(map[string]any); ok {
 			if ov["Type"] == "None" {
 				item["OverrideType"] = "None"
+				// Items that carry their schedule's value go back to it, as on the hub.
+				if sp, ok := item["ScheduledSetPoint"]; ok {
+					item["CurrentSetPoint"], item["SetpointOrigin"] = sp, "FromSchedule"
+				}
+				if st, ok := item["ScheduledWaterHeatingState"]; ok {
+					item["WaterHeatingState"], item["HotWaterDescription"] = st, "FromSchedule"
+				}
 			} else if sp, ok := ov["SetPoint"]; ok {
 				item["CurrentSetPoint"], item["OverrideType"] = sp, "Manual"
+				if _, ok := item["ScheduledWaterHeatingState"]; ok {
+					item["WaterHeatingState"] = map[bool]string{true: "On", false: "Off"}[intOf(sp) > 0]
+				}
 			}
 		}
 		json.NewEncoder(w).Encode(item)

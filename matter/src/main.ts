@@ -1,6 +1,7 @@
 // wiser-matter is the Matter bridge that wiser-dashboard runs alongside itself.
 // It shows each Wiser room as a thermostat and the hot water as a plug to any
-// Matter controller (Google Home, Apple Home, Alexa, SmartThings).
+// Matter controller (Google Home, Apple Home, Alexa, SmartThings), and the
+// waste guard's alert as a contact sensor.
 //
 // It talks to the dashboard's hub-compatible API (/data/...) with the hub
 // secret, exactly as Home Assistant does. The dashboard sends its address and
@@ -12,6 +13,7 @@ import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import { ThermostatServer } from "@matter/main/behaviors/thermostat";
 import { Thermostat } from "@matter/main/clusters/thermostat";
+import { ContactSensorDevice } from "@matter/main/devices/contact-sensor";
 import { OnOffPlugInUnitDevice, OnOffPlugInUnitRequirements } from "@matter/main/devices/on-off-plug-in-unit";
 import { ThermostatDevice } from "@matter/main/devices/thermostat";
 import { QrCode } from "@matter/main/types";
@@ -93,6 +95,15 @@ interface BoostSettings {
 }
 let boostSettings: BoostSettings = { minutes: 30, delta: 30, off: {} };
 
+// The waste guard's "Heating alert" sensor: there while the guard is on, open
+// while one of its alerts is active, so Apple Home can notify and Google Home
+// or Alexa routines can start on it.
+interface AlertState {
+    enabled: boolean;
+    on: boolean;
+}
+let alertState: AlertState = { enabled: false, on: false };
+
 let dashboardURL = process.env.WISER_URL ?? "";
 let secret = process.env.WISER_SECRET ?? "";
 
@@ -106,6 +117,10 @@ createInterface({ input: process.stdin }).on("line", line => {
             boostSettings = { ...boostSettings, ...msg.boost };
             syncSoon();
         }
+        if (msg.alert && typeof msg.alert === "object") {
+            alertState = { enabled: !!msg.alert.enabled, on: !!msg.alert.on };
+            syncSoon();
+        }
     } catch {
         log("ignoring a bad line on stdin");
     }
@@ -117,7 +132,8 @@ async function hub(method: string, path: string, body?: unknown): Promise<any> {
     if (!dashboardURL || !secret) throw new Error("waiting for the dashboard");
     const res = await fetch(dashboardURL + path, {
         method,
-        headers: { SECRET: secret, "Content-Type": "application/json" },
+        // The dashboard tells our changes apart from Home Assistant's (waste guard).
+        headers: { SECRET: secret, "Content-Type": "application/json", "X-Wiser-Client": "matter" },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(60_000),
     });
@@ -172,10 +188,12 @@ class CommandOnOffServer extends OnOffPlugInUnitRequirements.OnOffServer {
 
 const RoomDevice = ThermostatDevice.with(BridgedDeviceBasicInformationServer, ThermostatServer.with(Thermostat.Feature.Heating));
 const HotWaterDevice = OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationServer, CommandOnOffServer);
+const AlertDevice = ContactSensorDevice.with(BridgedDeviceBasicInformationServer);
 
 const rooms = new Map<number, Endpoint<typeof RoomDevice>>();
 const hotWater = new Map<number, Endpoint<typeof HotWaterDevice>>();
 const boosts = new Map<number, Endpoint<typeof HotWaterDevice>>(); // room id -> boost switch
+let alertSensor: Endpoint<typeof AlertDevice> | undefined;
 let lastDomain: any = null;
 const heldUntil = new Map<string, number>(); // endpoint id -> time its pending command settles
 const commandAt = new Map<string, number>(); // endpoint id -> time of its last command
@@ -362,7 +380,7 @@ let lastError = "";
 async function setReachable(value: boolean) {
     if (reachable === value) return;
     reachable = value;
-    for (const ep of [...rooms.values(), ...hotWater.values(), ...boosts.values()]) {
+    for (const ep of [...rooms.values(), ...hotWater.values(), ...boosts.values(), ...(alertSensor ? [alertSensor] : [])]) {
         await ep.set({ bridgedDeviceBasicInformation: { reachable: value } });
     }
     log(value ? "hub reachable again" : "hub unreachable");
@@ -389,6 +407,38 @@ async function syncBoost(room: any) {
     await ep.set(update);
 }
 
+// syncAlert adds, updates or removes the Heating alert sensor. A contact
+// sensor reads "closed" (true) normally and "open" (false) on an alert.
+async function syncAlert() {
+    if (!alertState.enabled) {
+        if (alertSensor) {
+            const ep = alertSensor;
+            alertSensor = undefined;
+            await ep.delete();
+            log("removed Heating alert");
+        }
+        return;
+    }
+    if (!alertSensor) {
+        alertSensor = new Endpoint(AlertDevice, {
+            id: "heating-alert",
+            bridgedDeviceBasicInformation: {
+                nodeLabel: "Heating alert",
+                productName: "Wiser waste guard alert",
+                uniqueId: `${identity.serial}-heating-alert`,
+                reachable,
+            },
+            booleanState: { stateValue: !alertState.on },
+        });
+        await bridge.add(alertSensor);
+        log("added Heating alert");
+    }
+    if (alertSensor.state.booleanState.stateValue !== !alertState.on) {
+        await alertSensor.set({ booleanState: { stateValue: !alertState.on } });
+        log(alertState.on ? "Heating alert open" : "Heating alert closed");
+    }
+}
+
 // Syncs run one at a time: the poll timer and settings changes both start them.
 let syncChain: Promise<void> = Promise.resolve();
 function syncSoon() {
@@ -397,6 +447,7 @@ function syncSoon() {
 }
 
 async function sync() {
+    await syncAlert();
     let domain: any;
     const requestedAt = Date.now();
     try {
@@ -496,7 +547,7 @@ function status() {
         qrCode: codes.qrPairingCode,
         qrRows: qrRows(codes.qrPairingCode),
         fabrics,
-        devices: rooms.size + hotWater.size + boosts.size,
+        devices: rooms.size + hotWater.size + boosts.size + (alertSensor ? 1 : 0),
         hubReachable: reachable && lastGood > 0,
         error: lastError,
     });
@@ -543,7 +594,7 @@ setInterval(async () => {
     // Pairing changes are also caught here: after the last controller removes
     // the bridge, matter.js resets the node without the lifecycle events.
     const fabrics = server.state.operationalCredentials.fabrics?.length ?? 0;
-    const now = JSON.stringify([reachable, lastGood > 0, lastError, rooms.size, hotWater.size, boosts.size, fabrics]);
+    const now = JSON.stringify([reachable, lastGood > 0, lastError, rooms.size, hotWater.size, boosts.size, !!alertSensor, fabrics]);
     if (now !== lastStatus) {
         lastStatus = now;
         status();
