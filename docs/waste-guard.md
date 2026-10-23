@@ -63,8 +63,20 @@ Every time the guard returns a room it also raises an alert for an hour, saying 
 - The dashboard's home page, with the 24-hour figure shown large.
 - Home Assistant, through the existing `/api/alerts` sensor (see Advanced → Alerts).
 - **Matter**: one contact sensor, **Heating alert**, that opens while any waste guard alert is active. Apple Home can
-  notify when it opens; Google Home and Alexa can use "opened" to start a routine that notifies or announces. Matter
-  can't carry text, so the details are on the dashboard.
+  notify when it opens; Google Home and Alexa can use "opened" to start a routine that notifies or announces. It never
+  changes, so routines tied to it keep working.
+  - **Show what the alert says** (option): Matter can't carry text, but the apps show a new device's name. So while
+    alerts are active the bridge adds up to three more sensors named with them (at most 32 characters), like
+    *Lounge back to 16°* or *13h 20m heating in 24h*, and removes each when its alert clears. Nothing should be tied
+    to these; they may land outside your rooms.
+  - **Heating hours as a temperature** (option, works with the guard off): a temperature sensor, *Heating hours
+    (last 24h)*, reading the last 24 hours' heating as degrees: 13.5° is 13.5 hours.
+
+## Trend
+
+The waste guard page charts the 24-hour heating total on every hour of the recorded history (14 days), with the limit,
+so you can see whether it's creeping up. It's worked out from the history the dashboard already keeps; hours whose 24
+hours are mostly missing (the dashboard was off) are left out.
 
 ## Settings
 
@@ -78,6 +90,8 @@ Every time the guard returns a room it also raises an alert for an hour, saying 
 | "Considered on" temperature (schedule alarm) | 17° | 10° – 25° |
 | Schedule alarm length | 12 h | 2 – 24 h |
 | 24-hour heating limit | 12 h | 1 – 23 h |
+| Show what the alert says (Matter) | Off | on/off |
+| Heating hours as a temperature (Matter) | Off | on/off |
 
 The alarms can also be silenced one by one under Advanced → Alerts, like every other alert.
 
@@ -104,7 +118,7 @@ The alarms can also be silenced one by one under Advanced → Alerts, like every
 ## API
 
 - `GET /api/guard`: settings, each room's and the hot water's guard status, the alarms, the 24-hour totals, the
-  recorded daily heating (for choosing the limit), and the activity log. `?onTemp=170&scheduleHours=12` previews the
+  recorded daily heating (for choosing the limit), the 14-day trend (`trend`), and the activity log. `?onTemp=170&scheduleHours=12` previews the
   schedule alarm for other values.
 - `POST /api/guard/settings`: save the settings.
 - `POST /api/guard/keep` `{"key": "room-2"}` or `{"key": "hotwater-2"}`: restart that timer.

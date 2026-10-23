@@ -23,6 +23,8 @@ type GuardSettings struct {
 	OnTemp        int             `json:"on_temp,omitempty"`        // tenths: a schedule at or above this counts as on
 	ScheduleHours int             `json:"schedule_hours,omitempty"` // schedule alarm: longest on-stretch allowed
 	DailyHours    int             `json:"daily_hours,omitempty"`    // 24-hour heating limit
+	MatterText    bool            `json:"matter_text,omitempty"`    // show alert texts as devices in Matter apps
+	MatterHours   bool            `json:"matter_hours,omitempty"`   // show the last 24 hours' heating as a temperature sensor
 }
 
 const (
@@ -502,6 +504,26 @@ func heatingTotals(samples []Sample) (house int, rooms map[string]int, covered i
 		}
 	}
 	return house, rooms, covered
+}
+
+// hmShort formats minutes as "14h 20m", for Matter device names.
+func hmShort(m int) string {
+	switch {
+	case m < 60:
+		return fmt.Sprintf("%dm", m)
+	case m%60 == 0:
+		return fmt.Sprintf("%dh", m/60)
+	}
+	return fmt.Sprintf("%dh %dm", m/60, m%60)
+}
+
+// matterName cuts a text to Matter's 32-character limit for device names.
+func matterName(s string) string {
+	r := []rune(s)
+	if len(r) > 32 {
+		return strings.TrimSpace(string(r[:31])) + "…"
+	}
+	return s
 }
 
 // hm formats minutes as "14 h 20 min".

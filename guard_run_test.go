@@ -415,3 +415,76 @@ func TestGuardAPI(t *testing.T) {
 		t.Errorf("status %v", g.State.Status)
 	}
 }
+
+func TestMatterAlertPayload(t *testing.T) {
+	alerts := []Alert{
+		{Kind: "guard-returned", Level: "warning", Short: "Lounge back to 16°"},
+		{Kind: "schedule-long", Level: "warning", Short: "Bedroom schedule on 16h"},
+		{Kind: "guard-returned", Level: "info", Short: "Watch: ignored"},
+		{Kind: "heating-24h", Level: "warning", Short: "13h 20m heating in 24h"},
+		{Kind: "guard-returned", Level: "warning", Short: "Study back to 16°"},
+	}
+	h := 13.3
+	a := matterAlert(alerts, nil, GuardSettings{MatterText: true}, &h)
+	if !a.On || *a.Hours != 13.3 || strings.Join(a.Texts, "|") != "13h 20m heating in 24h|Lounge back to 16°|Bedroom schedule on 16h" {
+		t.Errorf("payload = %+v %v", a, a.Texts)
+	}
+	if a := matterAlert(alerts, nil, GuardSettings{}, nil); len(a.Texts) != 0 || !a.On || a.Hours != nil {
+		t.Errorf("without the text option = %+v", a)
+	}
+	off := map[string]bool{"guard-returned": true, "schedule-long": true, "heating-24h": true}
+	if a := matterAlert(alerts, off, GuardSettings{MatterText: true}, nil); a.On || len(a.Texts) != 0 {
+		t.Errorf("silenced alerts = %+v", a)
+	}
+}
+
+func TestMatterName(t *testing.T) {
+	if got := matterName("Ground Floor Living Room back to 16°"); len([]rune(got)) != 32 || !strings.HasSuffix(got, "…") {
+		t.Errorf("matterName = %q (%d)", got, len([]rune(got)))
+	}
+	if got := matterName("Lounge back to 16°"); got != "Lounge back to 16°" {
+		t.Errorf("short name changed: %q", got)
+	}
+}
+
+func TestGuardSendsMatterDevices(t *testing.T) {
+	gt := newGuardTest(t, "["+lounge+"]", hotWaterOff, GuardSettings{MatterHours: true})
+	m := NewMatter(gt.srv.hub, "", t.TempDir(), 0, "127.0.0.1:0")
+	gt.srv.matter = m
+	now := time.Now()
+	for i := 120; i > 0; i-- {
+		gt.srv.history.append(Sample{T: now.Add(-time.Duration(i) * time.Minute).Unix(), Ch: map[string]int{"1": b2i(i <= 90)}})
+	}
+	// Guard off: no alert sensor, but the hours sensor still shows 1.5 h.
+	gt.tick()
+	if a := m.alert; a.Enabled || a.Hours == nil || *a.Hours != 1.5 {
+		t.Fatalf("guard off: %+v", a)
+	}
+	// Guard on and the room returned: the alert sensor opens, named devices on request.
+	gt.g.SetSettings(GuardSettings{Mode: "on", MatterText: true, MatterHours: true})
+	gt.tick()
+	gt.age("room-1", time.Hour)
+	gt.tick()
+	if a := m.alert; !a.Enabled || !a.On || len(a.Texts) != 1 || a.Texts[0] != "Lounge back to 16°" {
+		t.Errorf("after going back: %+v", a)
+	}
+}
+
+func TestRolling24h(t *testing.T) {
+	h := NewHistory("")
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	// 48 hours of samples; the heating runs 06:00-10:00 every day.
+	for m := 48 * 60; m > 0; m-- {
+		ts := now.Add(-time.Duration(m) * time.Minute)
+		on := b2i(ts.Hour() >= 6 && ts.Hour() < 10)
+		h.samples = append(h.samples, Sample{T: ts.Unix(), Ch: map[string]int{"1": on}})
+	}
+	pts := h.Rolling24h(now)
+	if len(pts) != 25 { // every hour from 24 h after the first sample to now
+		t.Fatalf("%d points, want 25", len(pts))
+	}
+	last := pts[len(pts)-1]
+	if last.T != now.Unix() || last.Heating != 240 || last.Covered != 24*60-1 { // the last sample is a minute before now
+		t.Errorf("last point %+v, want 240 minutes over a full day", last)
+	}
+}

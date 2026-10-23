@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -86,18 +87,23 @@ type Matter struct {
 // MatterAlert is the waste guard's "Heating alert" contact sensor: shown while
 // the guard is on, open while one of its alerts is active.
 type MatterAlert struct {
-	Enabled bool `json:"enabled"`
-	On      bool `json:"on"`
+	Enabled bool     `json:"enabled"`
+	On      bool     `json:"on"`
+	Texts   []string `json:"texts"`           // devices named with the active alerts (option)
+	Hours   *float64 `json:"hours,omitempty"` // the last 24 hours' heating, as a temperature sensor (option)
 }
 
-// SetAlert updates the alert sensor; a running bridge applies it within seconds.
-func (m *Matter) SetAlert(enabled, on bool) {
+// SetAlert updates the guard's devices; a running bridge applies it within seconds.
+func (m *Matter) SetAlert(a MatterAlert) {
 	if m == nil {
 		return
 	}
-	a := MatterAlert{Enabled: enabled, On: on && enabled}
+	a.On = a.On && a.Enabled
+	if !a.Enabled {
+		a.Texts = nil
+	}
 	m.mu.Lock()
-	if a != m.alert {
+	if !reflect.DeepEqual(a, m.alert) {
 		m.alert, m.alertVer = a, m.alertVer+1
 	}
 	m.mu.Unlock()

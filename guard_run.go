@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -65,6 +66,7 @@ type guardReturn struct {
 	At    time.Time `json:"at"`
 	Name  string    `json:"name"`
 	Text  string    `json:"text"`
+	Short string    `json:"short,omitempty"` // for Matter: "Lounge back to 16°"
 	Watch bool      `json:"watch,omitempty"` // watch only: it would have gone back
 }
 
@@ -214,8 +216,8 @@ func (g *Guard) Run(ctx context.Context) {
 
 // guardCommand is a change the guard sends to the hub.
 type guardCommand struct {
-	key, name, path, text string
-	body                  map[string]any
+	key, name, path, text, short string
+	body                         map[string]any
 }
 
 // tick looks at the cache once and acts on what it finds.
@@ -227,12 +229,22 @@ func (g *Guard) tick(ctx context.Context, now time.Time) {
 
 	g.mu.Lock()
 	s := g.settings.withDefaults()
+	// The last 24 hours' heating, for the Matter "temperature" sensor. It
+	// works whether or not the guard is on.
+	var hours *float64
+	if s.MatterHours && g.srv.history != nil {
+		house, _, covered := heatingTotals(g.srv.history.Since(now.Add(-24*time.Hour), 0))
+		if covered >= 60 {
+			h := math.Round(float64(house)/6) / 10
+			hours = &h
+		}
+	}
 	if s.Mode == "" {
 		// Off: forget everything, so turning it on starts with fresh timers.
 		g.tracks, g.status, g.failed, g.returned, g.alarms, g.heatAlarm = map[string]*guardTrack{}, map[string]guardStatus{}, map[string]string{}, map[string]guardReturn{}, nil, false
 		g.save()
 		g.mu.Unlock()
-		g.srv.matter.SetAlert(false, false)
+		g.srv.matter.SetAlert(MatterAlert{Hours: hours})
 		return
 	}
 	cmds := g.evaluate(snap, s, now)
@@ -247,11 +259,36 @@ func (g *Guard) tick(ctx context.Context, now time.Time) {
 		g.send(ctx, c, now)
 	}
 
-	alarm := false
-	for _, a := range g.Alerts() {
-		alarm = alarm || (a.Level != "info" && !alertOff[a.Kind])
+	g.srv.matter.SetAlert(matterAlert(g.Alerts(), alertOff, s, hours))
+}
+
+// matterAlert is what the Matter bridge shows: the Heating alert sensor, open
+// while a guard alert is active; optionally up to three devices named with the
+// alerts (the 24 hours' heating first); and optionally the hours sensor.
+func matterAlert(alerts []Alert, off map[string]bool, s GuardSettings, hours *float64) MatterAlert {
+	a := MatterAlert{Enabled: true, Hours: hours}
+	var texts []string
+	for _, al := range alerts {
+		if al.Level == "info" || off[al.Kind] {
+			continue
+		}
+		a.On = true
+		if s.MatterText && al.Short != "" {
+			if al.Kind == "heating-24h" {
+				texts = append([]string{al.Short}, texts...)
+			} else {
+				texts = append(texts, al.Short)
+			}
+		}
 	}
-	g.srv.matter.SetAlert(true, alarm)
+	seen := map[string]bool{}
+	for _, t := range texts {
+		if !seen[t] && len(a.Texts) < 3 {
+			seen[t] = true
+			a.Texts = append(a.Texts, t)
+		}
+	}
+	return a
 }
 
 // evaluate decides for every room and the hot water. It returns the commands
@@ -427,7 +464,11 @@ func (g *Guard) follow(key, name string, v verdict, origin string, s GuardSettin
 		st.State = "returning"
 		next.Returns++
 		next.LastReturn = now
-		cmd = &guardCommand{key: key, name: name, text: text}
+		short := name + " back to " + val(v.Baseline)
+		if hw {
+			short = "Hot water back " + val(v.Baseline)
+		}
+		cmd = &guardCommand{key: key, name: name, text: text, short: matterName(short)}
 	}
 	g.status[key] = st
 	return cmd
@@ -449,7 +490,7 @@ func (g *Guard) send(ctx context.Context, c guardCommand, now time.Time) {
 		g.logEvent(now, c.key, c.name, "error", "couldn't go back: "+msg, "")
 		return
 	}
-	g.returned[c.key] = guardReturn{At: now, Name: c.name, Text: c.text}
+	g.returned[c.key] = guardReturn{At: now, Name: c.name, Text: c.text, Short: c.short}
 	g.logEvent(now, c.key, c.name, "returned", c.text, "")
 	g.save()
 }
@@ -551,7 +592,7 @@ func (g *Guard) workOutAlarms(snap map[string]Entry, s GuardSettings, now time.T
 			detail += " Asking for heat longest: " + strings.Join(parts, ", ") + "."
 		}
 		out = append(out, Alert{Kind: "heating-24h", Level: "warning", Title: hm(house) + " of heating in the last 24 hours",
-			Detail: detail, Figure: hm(house)})
+			Detail: detail, Figure: hm(house), Short: hmShort(house) + " heating in 24h"})
 	}
 	return out
 }
@@ -580,7 +621,7 @@ func scheduleAlarms(snap map[string]Entry, s GuardSettings) []Alert {
 			out = append(out, Alert{Kind: "schedule-long", Level: "warning",
 				Title:  fmt.Sprintf("%s's schedule keeps it heated for %s", r.Name, longText(m)),
 				Detail: describe(m, start, "At or above "+degText(s.OnTemp)) + fmt.Sprintf(" Your limit is %d h.", s.ScheduleHours),
-				Figure: longText(m)})
+				Figure: longText(m), Short: matterName(r.Name + " schedule on " + shortLong(m))})
 		}
 	}
 	var hws []hotWaterView
@@ -594,10 +635,17 @@ func scheduleAlarms(snap map[string]Entry, s GuardSettings) []Alert {
 			out = append(out, Alert{Kind: "schedule-long", Level: "warning",
 				Title:  "The hot water schedule keeps it on for " + longText(m),
 				Detail: describe(m, start, "On") + fmt.Sprintf(" Your limit is %d h.", s.ScheduleHours),
-				Figure: longText(m)})
+				Figure: longText(m), Short: "Hot water schedule on " + shortLong(m)})
 		}
 	}
 	return out
+}
+
+func shortLong(m int) string {
+	if m >= weekMinutes {
+		return "all week"
+	}
+	return hmShort(m)
 }
 
 func longText(m int) string {
@@ -635,8 +683,12 @@ func (g *Guard) Alerts() []Alert {
 				Detail: "At " + r.At.Local().Format("15:04") + ". Turn the waste guard on to act on it."})
 			continue
 		}
+		short := r.Short
+		if short == "" {
+			short = matterName(r.Name + " back to schedule")
+		}
 		out = append(out, Alert{Kind: "guard-returned", Level: "warning", Title: r.Name + " went back to its schedule",
-			Detail: "At " + r.At.Local().Format("15:04") + ": " + r.Text + ". Turn it up again if you still need it."})
+			Detail: "At " + r.At.Local().Format("15:04") + ": " + r.Text + ". Turn it up again if you still need it.", Short: short})
 	}
 	failed := make([]string, 0, len(g.failed))
 	for k := range g.failed {
@@ -645,7 +697,7 @@ func (g *Guard) Alerts() []Alert {
 	sort.Strings(failed)
 	for _, k := range failed {
 		out = append(out, Alert{Kind: "guard-returned", Level: "warning", Title: "The waste guard couldn't return " + g.failed[k] + " to its schedule",
-			Detail: "The hub kept the change after three attempts. Check it in the Wiser app."})
+			Detail: "The hub kept the change after three attempts. Check it in the Wiser app.", Short: matterName(g.failed[k] + " not reset")})
 	}
 	return out
 }
@@ -707,6 +759,11 @@ func (s *Server) handleGuard(w http.ResponseWriter, r *http.Request) {
 		usual = sum / n
 	}
 
+	trend := s.history.Rolling24h(time.Now())
+	if trend == nil {
+		trend = []RollingPoint{}
+	}
+
 	g.mu.Lock()
 	events := make([]GuardEvent, 0, 100)
 	for i := len(g.events) - 1; i >= 0 && len(events) < 100; i-- {
@@ -728,6 +785,7 @@ func (s *Server) handleGuard(w http.ResponseWriter, r *http.Request) {
 		"preview":  previewAlarms,
 		"last24h":  map[string]any{"heating": house, "rooms": roomTotals, "covered": covered, "limit": set.DailyHours * 60},
 		"daily":    map[string]any{"usual": usual, "busiest": busiest, "busiestDay": busiestDay, "days": daily},
+		"trend":    trend,
 		"activity": events,
 		"matter":   s.matter != nil,
 	})

@@ -111,7 +111,9 @@ thermostat dial, Home Assistant, Google Home, an AI assistant or the dashboard i
 - **Alarms** (they never change anything): a schedule that keeps a room on for more than 12 hours, and more than
   12 hours of heating in the last 24, with the figure shown large on the home page.
 - Its alerts reach the dashboard, Home Assistant, and Google Home, Apple Home and Alexa through a **Heating alert**
-  contact sensor that opens while one is active.
+  contact sensor that opens while one is active; optionally with devices named with the alerts, and the last 24
+  hours' heating as a temperature sensor.
+- A **14-day trend** of the heating time in any 24 hours, with your limit.
 
 The rules and how they work are in [docs/waste-guard.md](docs/waste-guard.md).
 
@@ -140,7 +142,8 @@ A built-in Matter bridge puts your heating into the smart-home apps directly, **
 |---|---|
 | **Each room**, as a thermostat | Temperature, target and heat/off. A new target holds until the schedule's next change. |
 | **Hot water**, as a switch | On boosts it for 30 minutes; off turns it off until the schedule's next change. Shows whether it's actually heating. |
-| **Heating alert**, as a contact sensor (while the waste guard is on) | Opens while one of the waste guard's alerts is active, so Apple Home can notify you and Google Home or Alexa routines can start on it. |
+| **Heating alert**, as a contact sensor (while the waste guard is on) | Opens while one of the waste guard's alerts is active, so Apple Home can notify you and Google Home or Alexa routines can start on it. Optionally, up to three more sensors named with the alerts themselves (*Lounge back to 16°*), there while each is active. |
+| **Heating hours (last 24h)**, as a temperature sensor (option) | The last 24 hours' heating time as degrees: 13.5° is 13.5 hours. |
 | **"<Room> heating boost"**, as a switch per room | On raises the room to **its current temperature + 3°** (never below its target) for **30 minutes**; off returns it to the schedule. Shows on while the hub is boosting, however the boost was started. Length, increase and which rooms get one are set on the Google Home page. |
 
 - **Voice and Gemini**: *"Hey Google, set Ground Floor to 21"*, *"turn on Upper Floor heating boost"*. For a phrase

@@ -416,3 +416,46 @@ func (h *History) Runtime(days int) []DayRuntime {
 	}
 	return out
 }
+
+// RollingPoint is how long the heating ran in the 24 hours before T.
+type RollingPoint struct {
+	T       int64 `json:"t"`       // unix seconds, on the hour
+	Heating int   `json:"heating"` // minutes any heating zone ran
+	Covered int   `json:"covered"` // minutes of those 24 hours with data
+}
+
+// Rolling24h is the 24-hour heating total on every hour of the recorded
+// history, for the trend on the waste guard page. Hours whose 24 hours are
+// mostly missing (the dashboard was off) are left out.
+func (h *History) Rolling24h(now time.Time) []RollingPoint {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if len(h.samples) == 0 {
+		return nil
+	}
+	per := int(historyInterval / time.Minute)
+	// on[i] counts the samples before i with a heating zone running.
+	on := make([]int, len(h.samples)+1)
+	for i, s := range h.samples {
+		on[i+1] = on[i]
+		for _, v := range s.Ch {
+			if v == 1 {
+				on[i+1]++
+				break
+			}
+		}
+	}
+	idx := func(t int64) int { return sort.Search(len(h.samples), func(i int) bool { return h.samples[i].T > t }) }
+	const day = 24 * 3600
+	first := h.samples[0].T + day
+	t := (first + 3599) / 3600 * 3600
+	var out []RollingPoint
+	for ; t <= now.Unix(); t += 3600 {
+		a, b := idx(t-day), idx(t)
+		p := RollingPoint{T: t, Heating: (on[b] - on[a]) * per, Covered: (b - a) * per}
+		if p.Covered >= 20*60 {
+			out = append(out, p)
+		}
+	}
+	return out
+}
