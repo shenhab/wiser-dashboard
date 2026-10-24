@@ -18,6 +18,7 @@ import { OnOffPlugInUnitDevice, OnOffPlugInUnitRequirements } from "@matter/main
 import { TemperatureSensorDevice } from "@matter/main/devices/temperature-sensor";
 import { ThermostatDevice } from "@matter/main/devices/thermostat";
 import { QrCode } from "@matter/main/types";
+import { SessionManager } from "@matter/protocol";
 import { randomInt } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,7 +46,9 @@ const port = Number(arg("udp-port", "5540"));
 
 // Matter's log goes to stderr so stdout carries only status lines.
 Logger.format = "plain";
-Logger.level = LogLevel.NOTICE;
+// WISER_MATTER_LOG=debug (or info) shows what controllers ask the bridge, for
+// investigating an app's behaviour; the dashboard forwards the lines to its log.
+Logger.level = ({ debug: LogLevel.DEBUG, info: LogLevel.INFO, warn: LogLevel.WARN } as Record<string, LogLevel>)[process.env.WISER_MATTER_LOG ?? ""] ?? LogLevel.NOTICE;
 Logger.destinations.default.write = (text: string) => void process.stderr.write(text + "\n");
 
 function report(msg: Record<string, unknown>) {
@@ -106,8 +109,9 @@ interface AlertState {
     on: boolean;
     texts: { id: string; text: string }[];
     hours: number | null;
+    refresh: boolean; // ask the apps to subscribe again after a device is added or removed
 }
-let alertState: AlertState = { enabled: false, on: false, texts: [], hours: null };
+let alertState: AlertState = { enabled: false, on: false, texts: [], hours: null, refresh: true };
 let alertReceived = false; // the dashboard has said which guard devices to show
 
 let dashboardURL = process.env.WISER_URL ?? "";
@@ -135,6 +139,7 @@ createInterface({ input: process.stdin }).on("line", line => {
                     .filter((t: { text: string }) => t.text)
                     .slice(0, 3),
                 hours: typeof msg.alert.hours === "number" ? msg.alert.hours : null,
+                refresh: msg.alert.refresh !== false,
             };
             syncSoon();
         }
@@ -413,6 +418,7 @@ async function syncBoost(room: any) {
         if (ep) {
             boosts.delete(room.id);
             await ep.delete();
+            nudgeControllersSoon();
             log(`removed ${boostLabel(room)}`);
         }
         return;
@@ -420,6 +426,7 @@ async function syncBoost(room: any) {
     if (!ep) {
         ep = addBoost(room);
         await bridge.add(ep);
+        nudgeControllersSoon();
         watchBoost(room.id, ep);
         log(`added ${boostLabel(room)}`);
     }
@@ -436,6 +443,7 @@ async function syncAlert() {
             const ep = alertSensor;
             alertSensor = undefined;
             await ep.delete();
+            nudgeControllersSoon();
             log("removed Heating alert");
         }
         return;
@@ -452,6 +460,7 @@ async function syncAlert() {
             booleanState: { stateValue: !alertState.on },
         });
         await bridge.add(alertSensor);
+        nudgeControllersSoon();
         log("added Heating alert");
     }
     if (alertSensor.state.booleanState.stateValue !== !alertState.on) {
@@ -481,6 +490,7 @@ async function syncAlertTexts() {
         if (!want.has(id)) {
             alertTexts.delete(id);
             await ep.delete();
+            nudgeControllersSoon();
             log(`removed alert text device ${id}`);
         }
     }
@@ -498,6 +508,7 @@ async function syncAlertTexts() {
         });
         alertTexts.set(id, ep);
         await bridge.add(ep);
+        nudgeControllersSoon();
         log(`added alert text device "${text}"`);
     }
 }
@@ -509,6 +520,7 @@ async function syncHours() {
             const ep = hoursSensor;
             hoursSensor = undefined;
             await ep.delete();
+            nudgeControllersSoon();
             log("removed heating hours sensor");
         }
         return;
@@ -526,9 +538,37 @@ async function syncHours() {
             temperatureMeasurement: { measuredValue: value, minMeasuredValue: 0, maxMeasuredValue: 2400 },
         });
         await bridge.add(hoursSensor);
+        nudgeControllersSoon();
         log("added heating hours sensor");
     } else if (hoursSensor.state.temperatureMeasurement.measuredValue !== value) {
         await hoursSensor.set({ temperatureMeasurement: { measuredValue: value } });
+    }
+}
+
+// A controller learns of an endpoint added after it subscribed only when it
+// subscribes again. Google Home does that on its own schedule and shows the
+// device as offline until then. Closing the controllers' sessions politely (the
+// Matter CloseSession message, as at shutdown) makes them subscribe again at
+// once, and the new subscription covers the new endpoint. Only once online:
+// at startup the devices are there before any controller connects.
+let online = false;
+let nudgeTimer: ReturnType<typeof setTimeout> | undefined;
+function nudgeControllersSoon() {
+    if (!online || !alertState.refresh) return;
+    clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(() => void nudgeControllers(), 2_000);
+}
+async function nudgeControllers() {
+    const sessions = [...server.env.get(SessionManager).sessions].filter(s => !s.isPase && !s.isClosing);
+    if (!sessions.length) return;
+    log(`asking ${sessions.length} controller session(s) to subscribe again`);
+    for (const session of sessions) {
+        try {
+            await session.closeSubscriptions(true);
+            await session.initiateClose();
+        } catch (e) {
+            log(`closing a controller session failed: ${(e as Error).message}`);
+        }
     }
 }
 
@@ -563,6 +603,7 @@ async function sync() {
         if (!ep) {
             ep = addRoom(room);
             await bridge.add(ep);
+            nudgeControllersSoon();
             watchRoom(room.id, ep);
             log(`added room ${room.Name}`);
         }
@@ -589,7 +630,9 @@ async function sync() {
         if (!(domain.Room ?? []).some((r: any) => r.id === id)) {
             rooms.delete(id);
             await ep.delete();
+            nudgeControllersSoon();
             await boosts.get(id)?.delete();
+            nudgeControllersSoon();
             boosts.delete(id);
             log(`removed room ${id}`);
         }
@@ -600,6 +643,7 @@ async function sync() {
         if (!ep) {
             ep = addHotWater(hw);
             await bridge.add(ep);
+            nudgeControllersSoon();
             watchHotWater(hw.id, ep);
         }
         if (held(`hotwater-${hw.id}`)) continue;
@@ -685,6 +729,7 @@ for (let i = 0; i < 12 && rooms.size === 0; i++) {
 for (let i = 0; i < 30 && !alertReceived; i++) await new Promise(r => setTimeout(r, 500));
 await syncSoon();
 await server.start();
+online = true;
 log(`Matter bridge ${VERSION} on UDP port ${port}, ${rooms.size} rooms`);
 status();
 

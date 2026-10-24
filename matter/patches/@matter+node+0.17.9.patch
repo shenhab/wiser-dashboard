@@ -1,5 +1,5 @@
 diff --git a/node_modules/@matter/node/dist/cjs/node/client/Peers.js b/node_modules/@matter/node/dist/cjs/node/client/Peers.js
-index 43e03a6..afdfc95 100644
+index 43e03a6..ba6e659 100644
 --- a/node_modules/@matter/node/dist/cjs/node/client/Peers.js
 +++ b/node_modules/@matter/node/dist/cjs/node/client/Peers.js
 @@ -51,6 +51,7 @@ var import_ClientStructureEvents = require("./ClientStructureEvents.js");
@@ -10,13 +10,44 @@ index 43e03a6..afdfc95 100644
  class Peers extends import_EndpointContainer.EndpointContainer {
    #expirationInterval;
    #installedSubscriptionHandler;
-@@ -241,8 +242,13 @@ class Peers extends import_EndpointContainer.EndpointContainer {
+@@ -72,6 +73,7 @@ class Peers extends import_EndpointContainer.EndpointContainer {
+     );
+     const lifecycle = owner.lifecycle;
+     lifecycle.online.on(this.#nodeOnline.bind(this));
++    lifecycle.online.on(this.#resubscribeWhenPeerClosesSession.bind(this));
+     lifecycle.offline.on(this.#nodeOffline.bind(this));
+   }
+   /**
+@@ -241,8 +243,36 @@ class Peers extends import_EndpointContainer.EndpointContainer {
        return node;
      });
    }
 +  #shutdownResubscribeTimers = new import_protocol.PeerAddressMap();
++  #sessionObservers = new import_general.ObserverGroup();
++  /**
++   * Establish a new subscription to a peer that closes a session we hold a subscription over.
++   *
++   * A peer that sends CloseSession is alive and ends the session on purpose (shutdown, session eviction), and a
++   * subscription dies with its session. Nothing is to be waited for, so the sustained subscription establishes a
++   * new one at once instead of at the subscription timeout.
++   */
++  #resubscribeWhenPeerClosesSession() {
++    const sessions = this.owner.env.get(import_protocol.SessionManager);
++    this.#sessionObservers.on(sessions.sessions.added, (session) => {
++      if (!session.isInitiator || session.isPase) {
++        return;
++      }
++      this.#sessionObservers.on(session.closedByPeer, () => {
++        if (this.#closed) {
++          return;
++        }
++        this.owner.env.get(import_protocol.ClientSubscriptions).closeForPeer(session.peerAddress);
++      });
++    });
++  }
    async close() {
      this.#closed = true;
++    this.#sessionObservers.close();
 +    for (const timer of this.#shutdownResubscribeTimers.values()) {
 +      timer.stop();
 +    }
@@ -24,7 +55,7 @@ index 43e03a6..afdfc95 100644
      await this.#installedSubscriptionHandler?.close();
      this.#cancelExpiration();
      await this.#mutex;
-@@ -459,8 +465,37 @@ class Peers extends import_EndpointContainer.EndpointContainer {
+@@ -459,8 +489,37 @@ class Peers extends import_EndpointContainer.EndpointContainer {
      const peerAddress = node.maybeStateOf(import_CommissioningClient.CommissioningClient)?.peerAddress;
      if (peerAddress !== void 0) {
        await this.owner.env.get(import_protocol.SessionManager).handlePeerShutdown(peerAddress);
@@ -63,10 +94,18 @@ index 43e03a6..afdfc95 100644
     * Process startup events to detect node reboots in real-time. This allows us to terminate sessions
     * that would otherwise linger until timed out and cause interaction delays.
 diff --git a/node_modules/@matter/node/dist/esm/node/client/Peers.js b/node_modules/@matter/node/dist/esm/node/client/Peers.js
-index 84e836c..db5e573 100644
+index 84e836c..8f2d873 100644
 --- a/node_modules/@matter/node/dist/esm/node/client/Peers.js
 +++ b/node_modules/@matter/node/dist/esm/node/client/Peers.js
-@@ -40,6 +40,7 @@ import {
+@@ -28,6 +28,7 @@ import {
+   MatterError,
+   Minutes,
+   Mutex,
++  ObserverGroup,
+   Seconds,
+   Time,
+   Timestamp,
+@@ -40,6 +41,7 @@ import {
    FabricManager,
    Peer,
    PeerAddress,
@@ -74,7 +113,7 @@ index 84e836c..db5e573 100644
    PeerLeftError,
    SessionManager
  } from "@matter/protocol";
-@@ -49,6 +50,7 @@ import { ClientStructureEvents } from "./ClientStructureEvents.js";
+@@ -49,6 +51,7 @@ import { ClientStructureEvents } from "./ClientStructureEvents.js";
  const logger = Logger.get("Peers");
  const DEFAULT_TTL = Minutes(15);
  const EXPIRATION_INTERVAL = Minutes.one;
@@ -82,13 +121,44 @@ index 84e836c..db5e573 100644
  class Peers extends EndpointContainer {
    #expirationInterval;
    #installedSubscriptionHandler;
-@@ -239,8 +241,13 @@ class Peers extends EndpointContainer {
+@@ -70,6 +73,7 @@ class Peers extends EndpointContainer {
+     );
+     const lifecycle = owner.lifecycle;
+     lifecycle.online.on(this.#nodeOnline.bind(this));
++    lifecycle.online.on(this.#resubscribeWhenPeerClosesSession.bind(this));
+     lifecycle.offline.on(this.#nodeOffline.bind(this));
+   }
+   /**
+@@ -239,8 +243,36 @@ class Peers extends EndpointContainer {
        return node;
      });
    }
 +  #shutdownResubscribeTimers = new PeerAddressMap();
++  #sessionObservers = new ObserverGroup();
++  /**
++   * Establish a new subscription to a peer that closes a session we hold a subscription over.
++   *
++   * A peer that sends CloseSession is alive and ends the session on purpose (shutdown, session eviction), and a
++   * subscription dies with its session. Nothing is to be waited for, so the sustained subscription establishes a
++   * new one at once instead of at the subscription timeout.
++   */
++  #resubscribeWhenPeerClosesSession() {
++    const sessions = this.owner.env.get(SessionManager);
++    this.#sessionObservers.on(sessions.sessions.added, (session) => {
++      if (!session.isInitiator || session.isPase) {
++        return;
++      }
++      this.#sessionObservers.on(session.closedByPeer, () => {
++        if (this.#closed) {
++          return;
++        }
++        this.owner.env.get(ClientSubscriptions).closeForPeer(session.peerAddress);
++      });
++    });
++  }
    async close() {
      this.#closed = true;
++    this.#sessionObservers.close();
 +    for (const timer of this.#shutdownResubscribeTimers.values()) {
 +      timer.stop();
 +    }
@@ -96,7 +166,7 @@ index 84e836c..db5e573 100644
      await this.#installedSubscriptionHandler?.close();
      this.#cancelExpiration();
      await this.#mutex;
-@@ -457,8 +464,37 @@ class Peers extends EndpointContainer {
+@@ -457,8 +489,37 @@ class Peers extends EndpointContainer {
      const peerAddress = node.maybeStateOf(CommissioningClient)?.peerAddress;
      if (peerAddress !== void 0) {
        await this.owner.env.get(SessionManager).handlePeerShutdown(peerAddress);

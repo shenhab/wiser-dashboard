@@ -29,6 +29,10 @@ new version's heading.
 ### Changed
 - The Matter bridge goes online only once the waste guard's devices are in place, so Google Home can reach them after
   a restart like the rooms.
+- After adding or removing a device while online (an alert text, a room's boost switch), the Matter bridge asks the
+  connected apps to subscribe again, so the device doesn't show as offline until the app's next scheduled refresh.
+
+- `WISER_MATTER_LOG=debug` (or `info`) in the environment makes the Matter bridge log what the apps ask it.
 
 ### Build
 - The Matter bridge's test controller (matter.js) subscribes again within half a minute of the bridge announcing a

@@ -91,6 +91,7 @@ type MatterAlert struct {
 	On      bool         `json:"on"`
 	Texts   []MatterText `json:"texts"`           // devices named with the active alerts (option)
 	Hours   *float64     `json:"hours,omitempty"` // the last 24 hours' heating, as a temperature sensor (option)
+	Refresh bool         `json:"refresh"`         // ask the apps to subscribe again after a device is added or removed
 }
 
 // MatterText is a device named with an alert. Its ID is new for every

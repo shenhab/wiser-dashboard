@@ -95,6 +95,7 @@ hours are mostly missing (the dashboard was off) are left out.
 | Heating alert sensor (Matter) | On | on/off |
 | Show what the alert says (Matter) | Off | on/off |
 | Heating hours as a temperature (Matter) | Off | on/off |
+| Ask the apps to refresh after adding a device (Matter) | On | on/off |
 
 The alarms can also be silenced one by one under Advanced → Alerts, like every other alert.
 
@@ -108,6 +109,9 @@ The alarms can also be silenced one by one under Advanced → Alerts, like every
   - `longestOn` finds the longest stretch a schedule keeps a room on; `heatingTotals` adds up the last 24 hours.
 - `guard_run.go` runs after every poll (about every 20 seconds). It keeps the timers in `guard.json` next to the config,
   so a restart or an update doesn't reset them, and appends what it saw and did to `guard.jsonl` (14 days).
+- A controller only learns of a device added after it subscribed when it subscribes again; Google Home does that on
+  its own schedule and shows the device as offline until then. So after adding or removing devices while online, the
+  bridge closes the controllers' sessions politely (CloseSession, as at shutdown), and they subscribe again at once.
 - The guard takes its first look as soon as the dashboard starts, and the Matter bridge waits for it (up to 15 seconds)
   before going online. So the Heating alert and the hours sensor exist when Google Home reconnects after a restart or
   an update, like the rooms do; Google can leave a device added while it's connected unreachable for a long while.

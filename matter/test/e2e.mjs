@@ -317,6 +317,7 @@ check("an alert opens the Heating alert", !!(await until(async () => (await aler
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "a1", text: "Lounge back to 16°" }], hours: 13.3 } }) + "\n");
 check("alert text and hours devices are added", !!(await until(() => statuses.findLast(s => s.devices === 8), 20_000)));
 check("an alert text device is named with the alert", !!(await until(() => byName("Lounge back to 16°"), 30_000)));
+check("the bridge asks controllers to subscribe again after adding devices", !!(await until(() => bridgeLog.includes("controller session(s) to subscribe again"), 10_000)));
 const hoursDev = await until(() => byName("Heating hours (last 24h)"), 30_000);
 const hoursTemp = hoursDev?.getClusterClient(TemperatureMeasurement.Cluster);
 check("the hours sensor shows 13.3 h as 13.3°", (await hoursTemp?.getMeasuredValueAttribute(true)) === 1330, String(await hoursTemp?.getMeasuredValueAttribute(true)));

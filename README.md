@@ -284,7 +284,8 @@ journalctl -u wiser-dashboard -f        # its log
 Config, history, logs and Matter pairing live in `/var/lib/wiser-dashboard`. To keep them from an earlier
 install, stop the service, copy the old config folder's contents there, run
 `sudo chown -R wiser-dashboard: /var/lib/wiser-dashboard`, and start it again. A dashboard password goes in
-`/etc/wiser-dashboard.env` as `WISER_DASHBOARD_PASSWORD=...`. To upgrade, install the new binary over
+`/etc/wiser-dashboard.env` as `WISER_DASHBOARD_PASSWORD=...`; `WISER_MATTER_LOG=debug` there makes the Matter bridge
+log everything the apps ask it (lots), for looking into an app's behaviour. To upgrade, install the new binary over
 `/usr/local/bin/wiser-dashboard` and `sudo systemctl restart wiser-dashboard`; pairings and settings stay.
 
 ### Firewall

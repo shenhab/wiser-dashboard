@@ -1463,6 +1463,8 @@ function advGuard() {
       <label class="switch"><input type="checkbox" ${st.matter_no_alert ? "" : "checked"} onchange="saveGuard({matter_no_alert:!this.checked})"><span></span></label></div>
     <div class="setting"><div class="l"><b>Show what the alert says</b><span>A device named with the alert, like <i>Lounge back to 16°</i> or <i>Heating over 12h in 24h</i>, appears when it happens (up to three at a time) and goes when it clears. Google Home announces each as a new device, so the notification tells you what happened. Nothing should be tied to them.</span></div>
       <label class="switch"><input type="checkbox" ${st.matter_text ? "checked" : ""} onchange="saveGuard({matter_text:this.checked})"><span></span></label></div>
+    <div class="setting"><div class="l"><b>Ask the apps to refresh after adding a device</b><span>When a device appears or goes while the apps are connected, the bridge closes their sessions politely so they subscribe again at once; otherwise Google Home shows the new device as offline until its next refresh. Turn off if your app reacts badly to that.</span></div>
+      <label class="switch"><input type="checkbox" ${st.matter_no_refresh ? "" : "checked"} onchange="saveGuard({matter_no_refresh:!this.checked})"><span></span></label></div>
     <div class="setting"><div class="l"><b>Heating hours as a temperature</b><span>A sensor, <i>Heating hours (last 24h)</i>, that reads the heating time of the last 24 hours as degrees: 13.5° means 13.5 hours. Shown even with the guard off.</span></div>
       <label class="switch"><input type="checkbox" ${st.matter_hours ? "checked" : ""} onchange="saveGuard({matter_hours:this.checked})"><span></span></label></div>
   </div>`;
