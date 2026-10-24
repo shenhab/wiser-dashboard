@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"math"
 	"net/http"
@@ -26,18 +27,19 @@ type Guard struct {
 	logPath  string // guard.jsonl
 	interval time.Duration
 
-	mu        sync.Mutex
-	settings  GuardSettings
-	tracks    map[string]*guardTrack
-	status    map[string]guardStatus
-	events    []GuardEvent
-	returned  map[string]guardReturn // key -> the last time it went back (alert for an hour)
-	failed    map[string]string      // key -> name: couldn't go back
-	own       map[string]ownWrite    // key -> the dashboard's last change to it
-	heatAlarm bool                   // the 24-hour alarm is on (it clears with a margin)
-	alarms    []Alert                // schedule and 24-hour alarms, worked out once a minute
-	alarmsAt  time.Time
-	saved     []byte
+	mu         sync.Mutex
+	settings   GuardSettings
+	tracks     map[string]*guardTrack
+	status     map[string]guardStatus
+	events     []GuardEvent
+	returned   map[string]guardReturn // key -> the last time it went back (alert for an hour)
+	failed     map[string]string      // key -> name: couldn't go back
+	own        map[string]ownWrite    // key -> the dashboard's last change to it
+	heatAlarm  bool                   // the 24-hour alarm is on (it clears with a margin)
+	alarms     []Alert                // schedule and 24-hour alarms, worked out once a minute
+	alarmsAt   time.Time
+	alarmSince map[string]int64 // alarm -> unix time it began
+	saved      []byte
 }
 
 // guardStatus is what the dashboard shows for a room or the hot water.
@@ -80,6 +82,7 @@ type guardSaved struct {
 	Tracks    map[string]*guardTrack `json:"tracks"`
 	Returned  map[string]guardReturn `json:"returned,omitempty"`
 	HeatAlarm bool                   `json:"heatAlarm,omitempty"`
+	Alarms    map[string]int64       `json:"alarms,omitempty"`
 }
 
 const (
@@ -91,7 +94,7 @@ const (
 func NewGuard(srv *Server, dir string, s GuardSettings) *Guard {
 	g := &Guard{srv: srv, settings: s, interval: 10 * time.Second,
 		tracks: map[string]*guardTrack{}, status: map[string]guardStatus{}, returned: map[string]guardReturn{},
-		failed: map[string]string{}, own: map[string]ownWrite{}}
+		failed: map[string]string{}, own: map[string]ownWrite{}, alarmSince: map[string]int64{}}
 	if dir != "" {
 		g.path, g.logPath = filepath.Join(dir, "guard.json"), filepath.Join(dir, "guard.jsonl")
 		g.load()
@@ -112,6 +115,9 @@ func (g *Guard) load() {
 				g.returned[k] = r
 			}
 			g.heatAlarm = d.HeatAlarm
+			for k, v := range d.Alarms {
+				g.alarmSince[k] = v
+			}
 		}
 	}
 	f, err := os.Open(g.logPath)
@@ -149,7 +155,7 @@ func (g *Guard) save() {
 	if g.path == "" {
 		return
 	}
-	b, err := json.Marshal(guardSaved{Tracks: g.tracks, Returned: g.returned, HeatAlarm: g.heatAlarm})
+	b, err := json.Marshal(guardSaved{Tracks: g.tracks, Returned: g.returned, HeatAlarm: g.heatAlarm, Alarms: g.alarmSince})
 	if err != nil || string(b) == string(g.saved) {
 		return
 	}
@@ -242,6 +248,7 @@ func (g *Guard) tick(ctx context.Context, now time.Time) {
 	if s.Mode == "" {
 		// Off: forget everything, so turning it on starts with fresh timers.
 		g.tracks, g.status, g.failed, g.returned, g.alarms, g.heatAlarm = map[string]*guardTrack{}, map[string]guardStatus{}, map[string]string{}, map[string]guardReturn{}, nil, false
+		g.alarmSince = map[string]int64{}
 		g.save()
 		g.mu.Unlock()
 		g.srv.matter.SetAlert(MatterAlert{Hours: hours})
@@ -249,7 +256,7 @@ func (g *Guard) tick(ctx context.Context, now time.Time) {
 	}
 	cmds := g.evaluate(snap, s, now)
 	if now.Sub(g.alarmsAt) >= time.Minute {
-		g.alarms = g.workOutAlarms(snap, s, now)
+		g.alarms = g.stampAlarms(g.workOutAlarms(snap, s, now), now)
 		g.alarmsAt = now
 	}
 	g.save()
@@ -266,29 +273,64 @@ func (g *Guard) tick(ctx context.Context, now time.Time) {
 // while a guard alert is active; optionally up to three devices named with the
 // alerts (the 24 hours' heating first); and optionally the hours sensor.
 func matterAlert(alerts []Alert, off map[string]bool, s GuardSettings, hours *float64) MatterAlert {
-	a := MatterAlert{Enabled: true, Hours: hours}
-	var texts []string
+	a := MatterAlert{Enabled: !s.MatterNoAlert, Hours: hours}
+	var texts []MatterText
 	for _, al := range alerts {
 		if al.Level == "info" || off[al.Kind] {
 			continue
 		}
 		a.On = true
 		if s.MatterText && al.Short != "" {
+			t := MatterText{ID: alertTextID(al), Text: al.Short}
 			if al.Kind == "heating-24h" {
-				texts = append([]string{al.Short}, texts...)
+				texts = append([]MatterText{t}, texts...)
 			} else {
-				texts = append(texts, al.Short)
+				texts = append(texts, t)
 			}
 		}
 	}
 	seen := map[string]bool{}
 	for _, t := range texts {
-		if !seen[t] && len(a.Texts) < 3 {
-			seen[t] = true
+		if !seen[t.ID] && len(a.Texts) < 3 {
+			seen[t.ID] = true
 			a.Texts = append(a.Texts, t)
 		}
 	}
 	return a
+}
+
+// alertTextID names one occurrence of an alert: the same alert keeps its
+// device while it lasts, and a later one gets a new device the apps announce.
+func alertTextID(a Alert) string {
+	h := fnv.New32a()
+	fmt.Fprintf(h, "%s|%s|%d", a.Kind, a.Short, a.Since)
+	return fmt.Sprintf("%08x", h.Sum32())
+}
+
+// stampAlarms gives each alarm the time it began, kept while it lasts (and
+// across restarts), so its Matter device doesn't come back as new. Call with
+// g.mu held.
+func (g *Guard) stampAlarms(alarms []Alert, now time.Time) []Alert {
+	seen := map[string]bool{}
+	for i, a := range alarms {
+		key := a.Kind
+		if a.Kind != "heating-24h" {
+			key += "|" + a.Title
+		}
+		since, ok := g.alarmSince[key]
+		if !ok {
+			since = now.Unix()
+			g.alarmSince[key] = since
+		}
+		alarms[i].Since = since
+		seen[key] = true
+	}
+	for k := range g.alarmSince {
+		if !seen[k] {
+			delete(g.alarmSince, k)
+		}
+	}
+	return alarms
 }
 
 // evaluate decides for every room and the hot water. It returns the commands
@@ -592,7 +634,7 @@ func (g *Guard) workOutAlarms(snap map[string]Entry, s GuardSettings, now time.T
 			detail += " Asking for heat longest: " + strings.Join(parts, ", ") + "."
 		}
 		out = append(out, Alert{Kind: "heating-24h", Level: "warning", Title: hm(house) + " of heating in the last 24 hours",
-			Detail: detail, Figure: hm(house), Short: hmShort(house) + " heating in 24h"})
+			Detail: detail, Figure: hm(house), Short: fmt.Sprintf("Heating over %dh in 24h", s.DailyHours)})
 	}
 	return out
 }
@@ -688,7 +730,7 @@ func (g *Guard) Alerts() []Alert {
 			short = matterName(r.Name + " back to schedule")
 		}
 		out = append(out, Alert{Kind: "guard-returned", Level: "warning", Title: r.Name + " went back to its schedule",
-			Detail: "At " + r.At.Local().Format("15:04") + ": " + r.Text + ". Turn it up again if you still need it.", Short: short})
+			Detail: "At " + r.At.Local().Format("15:04") + ": " + r.Text + ". Turn it up again if you still need it.", Short: short, Since: r.At.Unix()})
 	}
 	failed := make([]string, 0, len(g.failed))
 	for k := range g.failed {

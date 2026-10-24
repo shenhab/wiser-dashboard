@@ -46,6 +46,7 @@ type Alert struct {
 	Detail string `json:"detail,omitempty"`
 	Figure string `json:"figure,omitempty"` // a number to show large, e.g. "14 h 20 min"
 	Short  string `json:"short,omitempty"`  // at most 32 characters, for a Matter device name
+	Since  int64  `json:"since,omitempty"`  // unix time this occurrence began (waste guard alerts)
 }
 
 var levelRank = map[string]int{"critical": 0, "warning": 1, "info": 2}

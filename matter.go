@@ -87,10 +87,17 @@ type Matter struct {
 // MatterAlert is the waste guard's "Heating alert" contact sensor: shown while
 // the guard is on, open while one of its alerts is active.
 type MatterAlert struct {
-	Enabled bool     `json:"enabled"`
-	On      bool     `json:"on"`
-	Texts   []string `json:"texts"`           // devices named with the active alerts (option)
-	Hours   *float64 `json:"hours,omitempty"` // the last 24 hours' heating, as a temperature sensor (option)
+	Enabled bool         `json:"enabled"` // the Heating alert sensor is shown
+	On      bool         `json:"on"`
+	Texts   []MatterText `json:"texts"`           // devices named with the active alerts (option)
+	Hours   *float64     `json:"hours,omitempty"` // the last 24 hours' heating, as a temperature sensor (option)
+}
+
+// MatterText is a device named with an alert. Its ID is new for every
+// occurrence, so the apps announce it as a new device each time.
+type MatterText struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
 }
 
 // SetAlert updates the guard's devices; a running bridge applies it within seconds.
@@ -99,9 +106,6 @@ func (m *Matter) SetAlert(a MatterAlert) {
 		return
 	}
 	a.On = a.On && a.Enabled
-	if !a.Enabled {
-		a.Texts = nil
-	}
 	m.mu.Lock()
 	if !reflect.DeepEqual(a, m.alert) {
 		m.alert, m.alertVer = a, m.alertVer+1

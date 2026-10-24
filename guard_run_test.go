@@ -421,13 +421,29 @@ func TestMatterAlertPayload(t *testing.T) {
 		{Kind: "guard-returned", Level: "warning", Short: "Lounge back to 16°"},
 		{Kind: "schedule-long", Level: "warning", Short: "Bedroom schedule on 16h"},
 		{Kind: "guard-returned", Level: "info", Short: "Watch: ignored"},
-		{Kind: "heating-24h", Level: "warning", Short: "13h 20m heating in 24h"},
+		{Kind: "heating-24h", Level: "warning", Short: "Heating over 12h in 24h"},
 		{Kind: "guard-returned", Level: "warning", Short: "Study back to 16°"},
 	}
 	h := 13.3
 	a := matterAlert(alerts, nil, GuardSettings{MatterText: true}, &h)
-	if !a.On || *a.Hours != 13.3 || strings.Join(a.Texts, "|") != "13h 20m heating in 24h|Lounge back to 16°|Bedroom schedule on 16h" {
-		t.Errorf("payload = %+v %v", a, a.Texts)
+	var names []string
+	for _, x := range a.Texts {
+		names = append(names, x.Text)
+	}
+	if !a.On || !a.Enabled || *a.Hours != 13.3 || strings.Join(names, "|") != "Heating over 12h in 24h|Lounge back to 16°|Bedroom schedule on 16h" {
+		t.Errorf("payload = %+v %v", a, names)
+	}
+	// A later occurrence of the same alert is a new device; the same one keeps its device.
+	again := alerts[0]
+	again.Since = 1000
+	if alertTextID(again) == alertTextID(alerts[0]) {
+		t.Error("a new occurrence kept the old device")
+	}
+	if alertTextID(alerts[0]) != alertTextID(alerts[0]) {
+		t.Error("the same occurrence changed device")
+	}
+	if a := matterAlert(alerts, nil, GuardSettings{MatterText: true, MatterNoAlert: true}, nil); a.Enabled || len(a.Texts) != 3 {
+		t.Errorf("Heating alert hidden, texts kept: %+v", a)
 	}
 	if a := matterAlert(alerts, nil, GuardSettings{}, nil); len(a.Texts) != 0 || !a.On || a.Hours != nil {
 		t.Errorf("without the text option = %+v", a)
@@ -465,7 +481,7 @@ func TestGuardSendsMatterDevices(t *testing.T) {
 	gt.tick()
 	gt.age("room-1", time.Hour)
 	gt.tick()
-	if a := m.alert; !a.Enabled || !a.On || len(a.Texts) != 1 || a.Texts[0] != "Lounge back to 16°" {
+	if a := m.alert; !a.Enabled || !a.On || len(a.Texts) != 1 || a.Texts[0].Text != "Lounge back to 16°" {
 		t.Errorf("after going back: %+v", a)
 	}
 }
@@ -486,5 +502,32 @@ func TestRolling24h(t *testing.T) {
 	last := pts[len(pts)-1]
 	if last.T != now.Unix() || last.Heating != 240 || last.Covered != 24*60-1 { // the last sample is a minute before now
 		t.Errorf("last point %+v, want 240 minutes over a full day", last)
+	}
+}
+
+func TestStampAlarms(t *testing.T) {
+	dir := t.TempDir()
+	g := NewGuard(&Server{}, dir, GuardSettings{})
+	t0 := time.Unix(1000, 0)
+	day := []Alert{{Kind: "heating-24h", Title: "12 h 5 min of heating"}, {Kind: "schedule-long", Title: "Bedroom's schedule keeps it heated for 16 h"}}
+	first := g.stampAlarms(append([]Alert(nil), day...), t0)
+	// A minute later the figure in the title has moved on: still the same occurrence.
+	later := []Alert{{Kind: "heating-24h", Title: "12 h 6 min of heating"}, day[1]}
+	second := g.stampAlarms(later, t0.Add(time.Minute))
+	if second[0].Since != first[0].Since || second[1].Since != first[1].Since {
+		t.Errorf("occurrence changed: %v -> %v", first, second)
+	}
+	// It clears, then comes back: a new occurrence.
+	g.stampAlarms(nil, t0.Add(2*time.Minute))
+	third := g.stampAlarms(append([]Alert(nil), day...), t0.Add(3*time.Minute))
+	if third[0].Since == first[0].Since {
+		t.Error("an alarm that came back kept its old occurrence")
+	}
+	// Kept across a restart.
+	g.mu.Lock()
+	g.save()
+	g.mu.Unlock()
+	if again := NewGuard(&Server{}, dir, GuardSettings{}); again.alarmSince["heating-24h"] != third[0].Since {
+		t.Errorf("after a restart: %v", again.alarmSince)
 	}
 }

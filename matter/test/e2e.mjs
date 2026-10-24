@@ -312,14 +312,20 @@ check("Heating alert reads closed with no alert", !!alertState && (await alertSt
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true } }) + "\n");
 check("an alert opens the Heating alert", !!(await until(async () => (await alertState?.getStateValueAttribute(true)) === false, 20_000)));
 // Options: alert texts as device names, and the 24 hours' heating as a temperature.
-bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: ["Lounge back to 16°"], hours: 13.3 } }) + "\n");
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "a1", text: "Lounge back to 16°" }], hours: 13.3 } }) + "\n");
 check("alert text and hours devices are added", !!(await until(() => statuses.findLast(s => s.devices === 8), 20_000)));
 check("an alert text device is named with the alert", !!(await until(() => byName("Lounge back to 16°"), 30_000)));
 const hoursDev = await until(() => byName("Heating hours (last 24h)"), 30_000);
 const hoursTemp = hoursDev?.getClusterClient(TemperatureMeasurement.Cluster);
 check("the hours sensor shows 13.3 h as 13.3°", (await hoursTemp?.getMeasuredValueAttribute(true)) === 1330, String(await hoursTemp?.getMeasuredValueAttribute(true)));
-bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: ["13h 20m heating in 24h"], hours: 14 } }) + "\n");
-check("a new alert replaces the text device", !!(await until(async () => (await byName("13h 20m heating in 24h")) && !(await byName("Lounge back to 16°")), 30_000)));
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "b2", text: "Heating over 12h in 24h" }], hours: 14 } }) + "\n");
+check("a new alert replaces the text device", !!(await until(async () => (await byName("Heating over 12h in 24h")) && !(await byName("Lounge back to 16°")), 30_000)));
+// The same text again, as a new occurrence: a new device, so the apps announce it.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "c3", text: "Heating over 12h in 24h" }], hours: 14 } }) + "\n");
+check("a repeat of the same alert is a new device", !!(await until(() => bridgeLog.includes("removed alert text device alert-text-b2") && bridgeLog.includes("added alert text device"), 20_000)));
+// Only the alert texts, without the permanent Heating alert.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: false, on: true, texts: [{ id: "c3", text: "Heating over 12h in 24h" }], hours: 14 } }) + "\n");
+check("the Heating alert can be hidden while alert texts show", !!(await until(async () => !(await byName("Heating alert")) && (await byName("Heating over 12h in 24h")), 30_000)));
 check("the hours sensor follows", !!(await until(async () => (await hoursTemp?.getMeasuredValueAttribute(true)) === 1400, 20_000)));
 bridge.stdin.write(JSON.stringify({ alert: { enabled: false, on: false, texts: [], hours: 14 } }) + "\n");
 check("the hours sensor stays with the guard off", !!(await until(() => statuses.findLast(s => s.devices === 6), 20_000)));

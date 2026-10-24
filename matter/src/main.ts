@@ -104,7 +104,7 @@ let boostSettings: BoostSettings = { minutes: 30, delta: 30, off: {} };
 interface AlertState {
     enabled: boolean;
     on: boolean;
-    texts: string[];
+    texts: { id: string; text: string }[];
     hours: number | null;
 }
 let alertState: AlertState = { enabled: false, on: false, texts: [], hours: null };
@@ -126,7 +126,12 @@ createInterface({ input: process.stdin }).on("line", line => {
             alertState = {
                 enabled: !!msg.alert.enabled,
                 on: !!msg.alert.on,
-                texts: Array.isArray(msg.alert.texts) ? msg.alert.texts.filter((t: unknown) => typeof t === "string").slice(0, 3) : [],
+                // Each occurrence of an alert comes with its own id, so the apps
+                // announce it as a new device even when the text is the same.
+                texts: (Array.isArray(msg.alert.texts) ? msg.alert.texts : [])
+                    .map((t: any) => (typeof t === "string" ? { id: "", text: t } : { id: String(t?.id ?? ""), text: String(t?.text ?? "") }))
+                    .filter((t: { text: string }) => t.text)
+                    .slice(0, 3),
                 hours: typeof msg.alert.hours === "number" ? msg.alert.hours : null,
             };
             syncSoon();
@@ -458,16 +463,18 @@ function guardDevices(): Endpoint<any>[] {
     return [...(alertSensor ? [alertSensor] : []), ...alertTexts.values(), ...(hoursSensor ? [hoursSensor] : [])];
 }
 
-// textId names an alert-text sensor after its text, so the same alert keeps
-// its device and a new one gets a new device (whose name the apps then show).
-function textId(text: string) {
+// textId names an alert-text sensor after the alert's occurrence (or its
+// text, from an older dashboard), so the same alert keeps its device and a new
+// one gets a new device, whose name the apps then announce.
+function textId(t: { id: string; text: string }) {
+    if (/^[0-9a-z]{1,16}$/.test(t.id)) return `alert-text-${t.id}`;
     let h = 0x811c9dc5;
-    for (const c of text) h = Math.imul(h ^ c.codePointAt(0)!, 0x01000193) >>> 0;
+    for (const c of t.text) h = Math.imul(h ^ c.codePointAt(0)!, 0x01000193) >>> 0;
     return `alert-text-${h.toString(16).padStart(8, "0")}`;
 }
 
 async function syncAlertTexts() {
-    const want = new Map(alertState.texts.map(t => [textId(t), t]));
+    const want = new Map(alertState.texts.map(t => [textId(t), t.text]));
     for (const [id, ep] of alertTexts) {
         if (!want.has(id)) {
             alertTexts.delete(id);

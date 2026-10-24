@@ -64,11 +64,13 @@ Every time the guard returns a room it also raises an alert for an hour, saying 
 - Home Assistant, through the existing `/api/alerts` sensor (see Advanced → Alerts).
 - **Matter**: one contact sensor, **Heating alert**, that opens while any waste guard alert is active. Apple Home can
   notify when it opens; Google Home and Alexa can use "opened" to start a routine that notifies or announces. It never
-  changes, so routines tied to it keep working.
-  - **Show what the alert says** (option): Matter can't carry text, but the apps show a new device's name. So while
-    alerts are active the bridge adds up to three more sensors named with them (at most 32 characters), like
-    *Lounge back to 16°* or *13h 20m heating in 24h*, and removes each when its alert clears. Nothing should be tied
-    to these; they may land outside your rooms.
+  changes, so routines tied to it keep working. It can be hidden, to see guard devices only when something happens.
+  - **Show what the alert says** (option): Matter can't carry text, but the apps show a new device's name, and Google
+    Home announces a new device with a notification. So when an alert happens the bridge adds a sensor named with it
+    (at most 32 characters, up to three at a time), like *Lounge back to 16°* or *Heating over 12h in 24h*, and
+    removes it when the alert clears. Each occurrence is a new device, so a repeat is announced again; one that lasts
+    keeps its device, also across restarts. Google can take a while to reach a device added this way, which doesn't
+    matter here: its name is the message. Nothing should be tied to these.
   - **Heating hours as a temperature** (option, works with the guard off): a temperature sensor, *Heating hours
     (last 24h)*, reading the last 24 hours' heating as degrees: 13.5° is 13.5 hours.
 
@@ -90,6 +92,7 @@ hours are mostly missing (the dashboard was off) are left out.
 | "Considered on" temperature (schedule alarm) | 17° | 10° – 25° |
 | Schedule alarm length | 12 h | 2 – 24 h |
 | 24-hour heating limit | 12 h | 1 – 23 h |
+| Heating alert sensor (Matter) | On | on/off |
 | Show what the alert says (Matter) | Off | on/off |
 | Heating hours as a temperature (Matter) | Off | on/off |
 
