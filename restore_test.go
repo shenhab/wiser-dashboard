@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,8 @@ func TestSaveAndRestoreHubData(t *testing.T) {
 	if err := old.Save(path, "192.168.1.5"); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+	// Windows has no Unix permissions: every file reads rw-rw-rw-.
+	if fi, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("saved file: %v, mode %v; want owner-only", err, fi.Mode().Perm())
 	}
 
