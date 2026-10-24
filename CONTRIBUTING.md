@@ -53,6 +53,9 @@ node test/system.mjs ../wiser-dashboard                              # the whole
 These pair a real Matter controller with the bridge against a mock hub; mDNS must work on your machine (on macOS,
 allow Local Network access when asked).
 
+`matter/patches/` holds fixes to matter.js that aren't released yet; `npm ci` applies them (`patch-package`, run by
+`postinstall`). Each patch names the upstream change it comes from. Drop a patch once a release includes the fix.
+
 ## Testing against a real hub
 
 The automated tests use mock hubs, so they can't catch everything the real hardware does. If your change affects

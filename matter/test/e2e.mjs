@@ -308,8 +308,7 @@ check("the bridge marks its requests for the waste guard", patches.every(x => x.
 // The waste guard's Heating alert: a contact sensor, closed normally, open on an alert.
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: false } }) + "\n");
 check("turning the waste guard on adds the Heating alert", !!(await until(() => statuses.findLast(s => s.devices === 6), 20_000)));
-// A device added after pairing can take the controller a while to pick up (slow CI runners especially).
-const alertDev = await until(() => byName("Heating alert"), 90_000);
+const alertDev = await until(() => byName("Heating alert"), 30_000);
 const alertState = alertDev?.getClusterClient(BooleanState.Cluster);
 check("Heating alert reads closed with no alert", !!(await until(async () => alertState && (await alertState.getStateValueAttribute(true)) === true, 20_000)), alertDev ? "" : "controller didn't see the device");
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true } }) + "\n");
@@ -365,6 +364,9 @@ patches.length = 0;
 await hwOnOff.on();
 p = await until(() => patches.find(x => x.path === "/data/domain/HotWater/2"));
 check("commands work after the restart", p?.data.RequestOverride.SetPoint === 1100);
+// The bridge announced its shutdown, so the controller drops the old subscription within half a minute and
+// subscribes again (patches/@matter+node: without it, it waits out the subscription timeout, minutes).
+check("the controller sees the Heating alert soon after the restart", !!(await until(() => byName("Heating alert"), 60_000)));
 
 // Unpairing
 await node.decommission();

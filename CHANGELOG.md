@@ -30,6 +30,10 @@ new version's heading.
 - The Matter bridge goes online only once the waste guard's devices are in place, so Google Home can reach them after
   a restart like the rooms.
 
+### Build
+- The Matter bridge's test controller (matter.js) subscribes again within half a minute of the bridge announcing a
+  restart, instead of waiting out its subscription timeout; a patch to matter.js until the fix is released.
+
 ## 1.6.0 (2026-10-22)
 
 ### Added

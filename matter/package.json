@@ -5,7 +5,8 @@
   "description": "Matter bridge for wiser-dashboard: exposes the Wiser rooms and hot water to Google Home, Apple Home and Alexa.",
   "scripts": {
     "build": "bun build --compile src/main.ts --outfile dist/wiser-matter",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@matter/main": "0.17.9",
@@ -15,6 +16,7 @@
     "@project-chip/matter.js": "^0.17.9",
     "@types/node": "22.19.1",
     "bun": "1.4.2",
+    "patch-package": "^8.0.1",
     "typescript": "5.9.3"
   }
 }

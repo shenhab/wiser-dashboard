@@ -1,0 +1,136 @@
+diff --git a/node_modules/@matter/node/dist/cjs/node/client/Peers.js b/node_modules/@matter/node/dist/cjs/node/client/Peers.js
+index 43e03a6..afdfc95 100644
+--- a/node_modules/@matter/node/dist/cjs/node/client/Peers.js
++++ b/node_modules/@matter/node/dist/cjs/node/client/Peers.js
+@@ -51,6 +51,7 @@ var import_ClientStructureEvents = require("./ClientStructureEvents.js");
+ const logger = import_general.Logger.get("Peers");
+ const DEFAULT_TTL = (0, import_general.Minutes)(15);
+ const EXPIRATION_INTERVAL = import_general.Minutes.one;
++const SHUTDOWN_RESUBSCRIBE_GRACE = (0, import_general.Seconds)(30);
+ class Peers extends import_EndpointContainer.EndpointContainer {
+   #expirationInterval;
+   #installedSubscriptionHandler;
+@@ -241,8 +242,13 @@ class Peers extends import_EndpointContainer.EndpointContainer {
+       return node;
+     });
+   }
++  #shutdownResubscribeTimers = new import_protocol.PeerAddressMap();
+   async close() {
+     this.#closed = true;
++    for (const timer of this.#shutdownResubscribeTimers.values()) {
++      timer.stop();
++    }
++    this.#shutdownResubscribeTimers.clear();
+     await this.#installedSubscriptionHandler?.close();
+     this.#cancelExpiration();
+     await this.#mutex;
+@@ -459,8 +465,37 @@ class Peers extends import_EndpointContainer.EndpointContainer {
+     const peerAddress = node.maybeStateOf(import_CommissioningClient.CommissioningClient)?.peerAddress;
+     if (peerAddress !== void 0) {
+       await this.owner.env.get(import_protocol.SessionManager).handlePeerShutdown(peerAddress);
++      this.#resubscribeUnlessResumed(peerAddress);
+     }
+   }
++  /**
++   * Establish a new subscription to a peer that announced a shutdown, unless the peer resumes the existing one.
++   *
++   * handlePeerShutdown keeps the peer's subscriptions registered so a peer that persists subscriptions can resume
++   * them after the reboot. A peer that does not persist them never reports again, and the subscriber would only
++   * notice at the subscription timeout: the maximum report interval plus two response times, often minutes.
++   * Closing a subscription that received no report within the grace makes the sustained subscription establish a
++   * new one; the peer resuming anyway then gets an invalid-subscription status.
++   */
++  #resubscribeUnlessResumed(peerAddress) {
++    const shutdownAt = import_general.Time.nowMs;
++    this.#shutdownResubscribeTimers.get(peerAddress)?.stop();
++    const timer = import_general.Time.getTimer("Resubscribe after peer shutdown", SHUTDOWN_RESUBSCRIBE_GRACE, () => {
++      this.#shutdownResubscribeTimers.delete(peerAddress);
++      if (this.#closed) {
++        return;
++      }
++      const subscriptions = this.owner.env.get(import_protocol.ClientSubscriptions);
++      const lastReport = subscriptions.lastReportStartedAtFor(peerAddress);
++      if (lastReport !== void 0 && lastReport >= shutdownAt) {
++        return;
++      }
++      logger.info(peerAddress, "did not resume its subscription after the shutdown; subscribing again");
++      subscriptions.closeForPeer(peerAddress);
++    });
++    this.#shutdownResubscribeTimers.set(peerAddress, timer);
++    timer.start();
++  }
+   /**
+    * Process startup events to detect node reboots in real-time. This allows us to terminate sessions
+    * that would otherwise linger until timed out and cause interaction delays.
+diff --git a/node_modules/@matter/node/dist/esm/node/client/Peers.js b/node_modules/@matter/node/dist/esm/node/client/Peers.js
+index 84e836c..db5e573 100644
+--- a/node_modules/@matter/node/dist/esm/node/client/Peers.js
++++ b/node_modules/@matter/node/dist/esm/node/client/Peers.js
+@@ -40,6 +40,7 @@ import {
+   FabricManager,
+   Peer,
+   PeerAddress,
++  PeerAddressMap,
+   PeerLeftError,
+   SessionManager
+ } from "@matter/protocol";
+@@ -49,6 +50,7 @@ import { ClientStructureEvents } from "./ClientStructureEvents.js";
+ const logger = Logger.get("Peers");
+ const DEFAULT_TTL = Minutes(15);
+ const EXPIRATION_INTERVAL = Minutes.one;
++const SHUTDOWN_RESUBSCRIBE_GRACE = Seconds(30);
+ class Peers extends EndpointContainer {
+   #expirationInterval;
+   #installedSubscriptionHandler;
+@@ -239,8 +241,13 @@ class Peers extends EndpointContainer {
+       return node;
+     });
+   }
++  #shutdownResubscribeTimers = new PeerAddressMap();
+   async close() {
+     this.#closed = true;
++    for (const timer of this.#shutdownResubscribeTimers.values()) {
++      timer.stop();
++    }
++    this.#shutdownResubscribeTimers.clear();
+     await this.#installedSubscriptionHandler?.close();
+     this.#cancelExpiration();
+     await this.#mutex;
+@@ -457,8 +464,37 @@ class Peers extends EndpointContainer {
+     const peerAddress = node.maybeStateOf(CommissioningClient)?.peerAddress;
+     if (peerAddress !== void 0) {
+       await this.owner.env.get(SessionManager).handlePeerShutdown(peerAddress);
++      this.#resubscribeUnlessResumed(peerAddress);
+     }
+   }
++  /**
++   * Establish a new subscription to a peer that announced a shutdown, unless the peer resumes the existing one.
++   *
++   * handlePeerShutdown keeps the peer's subscriptions registered so a peer that persists subscriptions can resume
++   * them after the reboot. A peer that does not persist them never reports again, and the subscriber would only
++   * notice at the subscription timeout: the maximum report interval plus two response times, often minutes.
++   * Closing a subscription that received no report within the grace makes the sustained subscription establish a
++   * new one; the peer resuming anyway then gets an invalid-subscription status.
++   */
++  #resubscribeUnlessResumed(peerAddress) {
++    const shutdownAt = Time.nowMs;
++    this.#shutdownResubscribeTimers.get(peerAddress)?.stop();
++    const timer = Time.getTimer("Resubscribe after peer shutdown", SHUTDOWN_RESUBSCRIBE_GRACE, () => {
++      this.#shutdownResubscribeTimers.delete(peerAddress);
++      if (this.#closed) {
++        return;
++      }
++      const subscriptions = this.owner.env.get(ClientSubscriptions);
++      const lastReport = subscriptions.lastReportStartedAtFor(peerAddress);
++      if (lastReport !== void 0 && lastReport >= shutdownAt) {
++        return;
++      }
++      logger.info(peerAddress, "did not resume its subscription after the shutdown; subscribing again");
++      subscriptions.closeForPeer(peerAddress);
++    });
++    this.#shutdownResubscribeTimers.set(peerAddress, timer);
++    timer.start();
++  }
+   /**
+    * Process startup events to detect node reboots in real-time. This allows us to terminate sessions
+    * that would otherwise linger until timed out and cause interaction delays.
