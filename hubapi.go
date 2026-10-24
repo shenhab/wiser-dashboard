@@ -73,6 +73,11 @@ func (s *Server) serveHubAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
+	// The Matter bridge marks its requests; anything else here (Home
+	// Assistant) is outside the dashboard, for the waste guard.
+	if r.Header.Get("X-Wiser-Client") == "matter" {
+		ctx = withSource(ctx, "matter")
+	}
 	res := s.forward(ctx, r.Method, path, body)
 	if res.Err != nil && res.Status == 0 {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"Error": "hub: " + res.Err.Error()})

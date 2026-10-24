@@ -111,6 +111,11 @@ textarea { width: 100%; font-family: var(--mono); font-size: 12.5px; }
 .callout { padding: 11px 14px; border-radius: 12px; background: var(--warn-soft); color: var(--warn); font-size: 13.5px; }
 .callout.crit { background: var(--crit-soft); color: var(--crit); }
 .callout.info { background: var(--surface-2); color: var(--ink-2); }
+.figure { font-size: 34px; font-weight: 680; letter-spacing: -.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.callout .figure { font-size: 28px; color: inherit; }
+.guard-line { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 12px; padding: 9px 12px; border-radius: 12px; background: var(--surface-2); color: var(--ink-2); font-size: 12.5px; text-align: left; }
+.guard-line.timer { background: var(--warn-soft); color: var(--warn); }
+.guard-line.fail { background: var(--crit-soft); color: var(--crit); }
 
 /* ---- hero ---- */
 .hero { padding: 26px 2px 6px; }
@@ -325,8 +330,10 @@ const sec = n => S.state?.sections?.[n]?.data;
 const hhmm = d => d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
 // Round first, so 119.6 minutes is "2h", not "1h 60m".
 const dur = m => { m = Math.round(m); return m < 1 ? "0m" : m < 60 ? m + "m" : Math.floor(m / 60) + "h" + (m % 60 ? " " + m % 60 + "m" : ""); };
-const ago = t => { if (!t) return "never"; const s = Math.round((Date.now() - new Date(t)) / 1000); return s < 8 ? "just now" : s < 90 ? s + "s ago" : Math.round(s / 60) + "m ago"; };
+const ago = t => { if (!t) return "never"; const s = Math.round((Date.now() - new Date(t)) / 1000); return s < 8 ? "just now" : s < 90 ? s + "s ago" : s < 5400 ? Math.round(s / 60) + "m ago" : s < 172800 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago"; };
 const isHeating = r => r.PercentageDemand > 0 || r.ControlOutputState === "On";
+// "14 h 20 min", as the server writes it in alerts.
+const hm = m => { m = Math.round(m); return m < 60 ? m + " min" : Math.floor(m / 60) + " h" + (m % 60 ? " " + m % 60 + " min" : ""); };
 const chName = c => S.state?.channelNames?.[c.id] || c.Name || "Zone " + c.id;
 const zoneOf = id => (sec("HeatingChannel") || []).find(c => (c.RoomIds || []).includes(id));
 const rooms = () => sec("Room") || [];
@@ -377,7 +384,8 @@ async function poll(force) {
   settlePending();
   renderStatus();
   if (!S.state.configured && !S.setupOpen) openSetup();
-  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras, S.state.alerts, S.state.settings, S.state.matter, S.state.update]);
+  const sig = JSON.stringify([S.state.sections, S.state.channelNames, S.state.extras, S.state.alerts, S.state.settings, S.state.matter, S.state.update, S.state.guard]);
+  if (S.tab === "advanced" && S.adv === "guard" && Date.now() - (S.guardAt || 0) > 15000) loadGuard();
   const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.closest(".modal");
   if (force || (sig !== S.lastSig && !typing && !S.edit)) { S.lastSig = sig; render(); }
 }
@@ -402,12 +410,14 @@ function renderStatus() {
     if (e.fetched && !e.fetched.startsWith("0001")) fresh = Math.max(fresh, +new Date(e.fetched));
     if (e.error) errs++;
   }
-  const dot = !st.configured ? "err" : errs ? "busy" : fresh ? "ok" : "busy";
+  // After a restart the rooms show the data saved before it until the hub answers.
+  const restored = st.sections?.Room?.restored;
+  const dot = !st.configured ? "err" : errs || restored ? "busy" : fresh ? "ok" : "busy";
   const theme = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   $("#status").innerHTML = `
     ${st.queue > 0 ? `<span class="chip warn"><span class="spin"></span>${st.queue} sending</span>` : ""}
     <span class="dot ${dot}" title="${esc(st.hubIP || "")}"></span>
-    <span class="txt">${!st.configured ? "Not connected" : fresh ? "Updated " + ago(fresh) : "Connecting…"}</span>
+    <span class="txt" ${restored ? `title="The dashboard restarted; this is what it last knew. Controls still work."` : ""}>${!st.configured ? "Not connected" : restored ? `Showing saved data (${ago(st.sections.Room.fetched)}) · waiting for the hub` : fresh ? "Updated " + ago(fresh) : "Connecting…"}</span>
     ${st.update?.busy && st.update.busy !== "checking" ? `<span class="chip warn"><span class="spin"></span>Updating…</span>` : st.update?.available ? `<button class="chip heat" style="border:0;cursor:pointer" onclick="go('advanced','system')" title="Version ${esc(st.update.latest)} is available">Update available</button>` : ""}
     <span class="txt faint xs" title="Wiser Dashboard version">${esc(st.version || "")}</span>
     <button class="icon-btn" title="Switch theme" aria-label="Switch theme" onclick="toggleTheme()" style="width:30px;height:30px">${theme === "dark" ? ICON.sun : ICON.moon}</button>`;
@@ -492,11 +502,15 @@ async function setAway(on) {
 // The away temperature is the hub's own setting (Advanced → Hub settings); Off means no heating while away.
 function awayTemp() { const v = sec("System")?.AwayModeSetPointLimit; return v == null ? 100 : v; }
 function alertBanner() {
-  const al = (S.state.alerts || []).filter(a => a.level !== "info");
+  // The 24 hours of heating comes first, its figure large.
+  const al = (S.state.alerts || []).filter(a => a.level !== "info").sort((a, b) => (b.kind === "heating-24h") - (a.kind === "heating-24h"));
   if (!al.length) return "";
   const crit = al.some(a => a.level === "critical");
+  const line = a => a.figure && a.kind === "heating-24h"
+    ? `<div style="margin-bottom:6px"><div class="figure">${esc(a.figure)}</div><b>${esc(a.title.replace(a.figure, "").trim())}</b>${a.detail ? `<span style="opacity:.85"> · ${esc(a.detail)}</span>` : ""}</div>`
+    : `<div><b>${esc(a.title)}</b>${a.detail ? `<span style="opacity:.85"> · ${esc(a.detail)}</span>` : ""}</div>`;
   return `<div class="callout ${crit ? "crit" : ""}" style="margin-top:16px;display:flex;gap:12px;align-items:center;justify-content:space-between">
-    <div>${al.slice(0, 3).map(a => `<div><b>${esc(a.title)}</b>${a.detail ? `<span style="opacity:.85"> · ${esc(a.detail)}</span>` : ""}</div>`).join("")}${al.length > 3 ? `<div>and ${al.length - 3} more</div>` : ""}</div>
+    <div>${al.slice(0, 3).map(line).join("")}${al.length > 3 ? `<div>and ${al.length - 3} more</div>` : ""}</div>
     <button class="btn sm" onclick="go('advanced','alerts')">All alerts</button></div>`;
 }
 // Minutes until a room reaches target, from its learned warm-up speed.
@@ -560,6 +574,7 @@ function roomCard(r) {
       ${overridden ? `<button class="btn sm" onclick="patch('/data/domain/Room/${r.id}',{RequestOverride:{Type:'None'}},'${esc(r.Name)} back to schedule')">${ICON.back}Resume schedule</button>` : ""}
       <button class="btn sm ghost" onclick="openRoom(${r.id})">Details ›</button>
     </div>
+    ${guardLine("room-" + r.id)}
     <div class="room-foot">
       ${tempChart("spark" + r.id, r.id, {hours: 24, height: 46, spark: true})}
       <div class="row between" style="margin-top:8px"><span>${nextChange(r)}</span><span>${demandText(r)}</span></div>
@@ -658,10 +673,39 @@ function hotWaterCard(w) {
       <button class="btn sm" onclick="hwSet(${w.id},false)">Turn off</button>
       ${overridden ? `<button class="btn sm" onclick="patch('/data/domain/HotWater/${w.id}',{RequestOverride:{Type:'None'}},'Hot water back to schedule')">${ICON.back}Resume schedule</button>` : ""}
     </div>
+    ${guardLine("hotwater-" + w.id)}
     <div class="room-foot row between"><span>${next}</span>
       <div class="seg">${["Auto", "Manual"].map(m => `<button class="${w.Mode === m ? "on" : ""}" onclick="patch('/data/domain/HotWater/${w.id}',{Mode:'${m}'},'Hot water ${m.toLowerCase()} mode')">${m}</button>`).join("")}</div></div>
   </article>`;
 }
+// ---- waste guard on the cards ----
+function guardLine(key) {
+  const g = S.state.guard, st = g?.mode && g.status?.[key];
+  if (!st) return "";
+  const back = key.startsWith("hotwater") ? (st.baseline ? "on" : "off") : deg(st.baseline);
+  const keep = `<button class="btn sm" onclick="guardKeep('${key}')">Keep ${dur(g.minutes)} more</button>`;
+  switch (st.state) {
+    case "timer": {
+      const at = new Date(st.until * 1000), left = Math.max(0, (at - Date.now()) / 60000);
+      return `<div class="guard-line timer"><span>Waste guard: back to <b>${back}</b> at ${hhmm(at)} (in ${dur(left)})</span>${keep}</div>`;
+    }
+    case "watching": return `<div class="guard-line"><span>Waste guard: above the schedule (${esc(st.why)}). ${dur(g.minutes)} of heating allowed once it starts.</span></div>`;
+    case "would-return": return `<div class="guard-line timer"><span>Watch only: the waste guard would have put this back to <b>${back}</b></span>${keep}</div>`;
+    case "returning": return `<div class="guard-line"><span><span class="spin" style="width:10px;height:10px"></span> Waste guard: going back to ${back}…</span></div>`;
+    case "failed": return `<div class="guard-line fail"><span>The waste guard couldn't put this back to ${back}</span>${keep}</div>`;
+    case "paused": return st.since ? `<div class="guard-line"><span>Waste guard paused: ${esc(st.why)}</span></div>` : "";
+  }
+  return "";
+}
+async function guardKeep(key) {
+  try {
+    const r = await api("/api/guard/keep", {key});
+    r.ok ? toast(`Kept for another ${dur(S.state.guard?.minutes || 60)}`) : toast(r.error, true);
+  } catch (e) { toast(e.message, true); }
+  poll(true);
+  if (S.guard) loadGuard();
+}
+
 function hwSet(id, on, minutes) {
   const ov = {Type: "Manual", SetPoint: on ? 1100 : OFF};
   if (minutes) Object.assign(ov, {DurationMinutes: minutes, Originator: "App"});
@@ -725,10 +769,13 @@ document.addEventListener("pointermove", e => {
   head.textContent = new Date(best.t * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"});
   tip.append(head);
   const row = (val, label, style) => { const r = document.createElement("div"); r.className = "r"; const i = document.createElement("i"); i.style.cssText = style; const b = document.createElement("b"); b.textContent = val; const s = document.createElement("span"); s.textContent = label; s.style.color = "var(--ink-3)"; r.append(i, b, s); tip.append(r); };
-  row(deg(best.v[0]), "temperature", "border-color:var(--temp)");
-  row(deg(best.v[1]), "target", "border-top-style:dashed;border-color:var(--ink-3)");
-  row(best.v[2] + "%", best.v[2] > 0 ? "heating" : "demand", "border-color:var(--heat)");
-  if (best.v[3] >= 0) row(best.v[3] + "%", "humidity", "border-color:transparent");
+  if (c.rows) c.rows(best).forEach(r => row(...r));
+  else {
+    row(deg(best.v[0]), "temperature", "border-color:var(--temp)");
+    row(deg(best.v[1]), "target", "border-top-style:dashed;border-color:var(--ink-3)");
+    row(best.v[2] + "%", best.v[2] > 0 ? "heating" : "demand", "border-color:var(--heat)");
+    if (best.v[3] >= 0) row(best.v[3] + "%", "humidity", "border-color:transparent");
+  }
   const tx = Math.min(e.clientX + 14, innerWidth - 190), ty = Math.max(8, e.clientY - 90);
   tip.style.left = tx + "px"; tip.style.top = ty + "px"; tip.classList.add("show");
 });
@@ -1259,11 +1306,11 @@ function capabilitiesCard() {
 
 // ---------------- advanced ----------------
 function viewAdvanced() {
-  const sub = {settings: advSettings, smarthome: advSmartHome, mcp: advMCP, alerts: advAlerts, system: advSystem, network: advNetwork, explorer: advExplorer};
+  const sub = {settings: advSettings, guard: advGuard, smarthome: advSmartHome, mcp: advMCP, alerts: advAlerts, system: advSystem, network: advNetwork, explorer: advExplorer};
   if (!sub[S.adv]) S.adv = "settings";
   const nAlerts = (S.state.alerts || []).filter(a => a.level !== "info").length;
   return `<section class="hero" style="padding-bottom:0"><h1 style="margin-bottom:4px">Advanced</h1><p class="muted" style="margin:0">Everything the hub exposes. Changes go straight to the hub.</p></section>
-    <div class="row" style="margin:18px 0 0"><div class="seg" style="overflow-x:auto;max-width:100%">${[["settings", "Hub settings"], ["smarthome", "Google Home"], ["mcp", "AI assistants"], ["alerts", "Alerts" + (nAlerts ? ` (${nAlerts})` : "")], ["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
+    <div class="row" style="margin:18px 0 0"><div class="seg" style="overflow-x:auto;max-width:100%">${[["settings", "Hub settings"], ["guard", "Waste guard"], ["smarthome", "Google Home"], ["mcp", "AI assistants"], ["alerts", "Alerts" + (nAlerts ? ` (${nAlerts})` : "")], ["system", "System"], ["network", "Network"], ["explorer", "Explorer & console"]].map(([k, l]) => `<button class="${S.adv === k ? "on" : ""}" onclick="S.adv='${k}';S.edit=null;render()">${l}</button>`).join("")}</div>
     <button class="btn sm" style="margin-left:auto" onclick="openSetup()">Hub connection</button></div>
     ${sub[S.adv]()}`;
 }
@@ -1319,7 +1366,7 @@ function advAlerts() {
   for (let v = 50; v <= 200; v += 5) minOpts += `<option value="${v}" ${v === st.minRoomTemp ? "selected" : ""}>${(v / 10).toFixed(1)}°</option>`;
   const lvl = {critical: "crit", warning: "warn", info: ""};
   const yaml = haYaml();
-  return `<div class="section-h"><h2>Right now</h2></div><div class="card">${al.length ? `<table class="kv">${al.map(a => `<tr><td style="width:1%;white-space:nowrap"><span class="chip ${lvl[a.level]}">${esc(a.level)}</span></td><td><b>${esc(a.title)}</b>${a.detail ? `<div class="faint small">${esc(a.detail)}</div>` : ""}</td></tr>`).join("")}</table>` : `<div class="row"><span class="chip good">All clear</span><span class="faint small">Nothing needs attention.</span></div>`}</div>
+  return `<div class="section-h"><h2>Right now</h2></div><div class="card">${al.length ? `<table class="kv">${al.map(a => `<tr><td style="width:1%;white-space:nowrap"><span class="chip ${lvl[a.level]}">${esc(a.level)}</span></td><td>${a.figure && a.kind === "heating-24h" ? `<div class="figure" style="font-size:24px">${esc(a.figure)}</div>` : ""}<b>${esc(a.title)}</b>${a.detail ? `<div class="faint small">${esc(a.detail)}</div>` : ""}</td></tr>`).join("")}</table>` : `<div class="row"><span class="chip good">All clear</span><span class="faint small">Nothing needs attention.</span></div>`}</div>
     <div class="section-h"><h2>What to watch for</h2></div><div class="card" style="padding:4px 18px">
       <div class="setting"><div class="l"><b>Minimum room temperature</b><span>Warn when a room drops below this</span></div><select onchange="saveAlertSettings({minRoomTemp:+this.value})">${minOpts}</select></div>
       ${(st.kinds || []).map(k => `<div class="setting"><div class="l"><b>${esc(k.Label)}</b></div><label class="switch"><input type="checkbox" ${off[k.Kind] ? "" : "checked"} onchange="saveAlertSettings({toggle:'${k.Kind}',on:this.checked})"><span></span></label></div>`).join("")}
@@ -1330,6 +1377,135 @@ function advAlerts() {
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="copyText(haYaml(),'Copied')">Copy</button><span class="faint xs">The sensor's value is the number of warning and critical alerts; its "summary" lists them.</span></div>
     </div>`;
 }
+// ---------------- waste guard ----------------
+async function loadGuard() {
+  S.guardAt = Date.now();
+  try { S.guard = await api("/api/guard"); if (S.tab === "advanced" && S.adv === "guard") render(); } catch (e) { toast(e.message, true); }
+}
+async function saveGuard(change) {
+  const cur = S.guard?.settings || {};
+  const next = {...cur, exclude: {...(cur.exclude || {})}, ...change};
+  if (change.cover) { delete next.cover; if (change.cover.on) delete next.exclude[change.cover.key]; else next.exclude[change.cover.key] = true; }
+  try {
+    const r = await api("/api/guard/settings", next);
+    r.ok ? toast(change.mode !== undefined ? ({"": "Waste guard off", watch: "Waste guard watching", on: "Waste guard on"})[change.mode] : "Saved") : toast(r.error, true);
+  } catch (e) { toast(e.message, true); }
+  await loadGuard();
+  poll(true);
+}
+const GUARD_CHIPS = {
+  schedule: ["good", "On schedule"], respected: ["", "Left alone"], below: ["", "Below the schedule"], watching: ["warn", "Above the schedule"],
+  timer: ["heat", "Timer running"], "would-return": ["warn", "Would go back"], returning: ["", "Going back…"], failed: ["crit", "Couldn't go back"],
+  exempt: ["", "Not limited"], excluded: ["", "Not covered"], paused: ["warn", "Paused"],
+};
+function advGuard() {
+  const G = S.guard;
+  if (!G) { loadGuard(); return `<div class="card" style="margin-top:18px"><div class="row"><span class="spin"></span><span class="small">Loading…</span></div></div>`; }
+  const st = G.settings, mode = st.mode || "", exclude = st.exclude || {};
+  const explain = {
+    "": "Nothing is watched or changed.",
+    watch: "The guard logs what it would do and changes nothing. Try this for a few days first.",
+    on: `Heating above the schedule with no end chosen goes back to the schedule after ${dur(st.minutes)} of heating.`,
+  }[mode];
+  let h = `<div class="section-h"><h2>Waste guard</h2></div><div class="card">
+    <p class="small muted" style="margin-top:0">Most wasted heating is a room turned up by hand and forgotten. The guard watches every room and the hot water, whoever changed them (the Wiser app, a thermostat, Google Home, Home Assistant or this dashboard), and puts heating above the schedule back after a while, unless it was given an end, like a boost or a timed hold. The schedule, away mode and turning things down are never touched.</p>
+    <div class="row" style="gap:12px;flex-wrap:wrap"><div class="seg">${[["", "Off"], ["watch", "Watch only"], ["on", "On"]].map(([v, l]) => `<button class="${mode === v ? "on" : ""}" onclick="saveGuard({mode:'${v}'})">${l}</button>`).join("")}</div>
+    <span class="small muted">${esc(explain)}</span></div></div>`;
+
+  // The last 24 hours, with the figure large.
+  const L = G.last24h, over = mode && L.heating >= L.limit;
+  const roomsLine = Object.entries(L.rooms || {}).filter(([, m]) => m > 0).sort((a, b) => b[1] - a[1]).map(([n, m]) => `${esc(n)} ${hm(m)}`).join(" · ");
+  h += `<div class="section-h"><h2>Last 24 hours</h2></div><div class="card"><div class="row" style="justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px">
+    <div><div class="figure" style="color:${over ? "var(--crit)" : "var(--ink)"}">${hm(L.heating)}</div><div class="small muted">of heating · your limit ${hm(L.limit)}${L.covered < 23 * 60 ? ` · ${hm(L.covered)} recorded so far` : ""}</div></div>
+    <div class="small muted" style="text-align:right">${roomsLine ? "Asking for heat: " + roomsLine : "No room asked for heat"}</div></div></div>`;
+
+  if (mode) {
+    const lvl = {critical: "crit", warning: "warn", info: ""};
+    if (G.alerts.length) h += `<div class="section-h"><h2>Alerts</h2></div><div class="card"><table class="kv">${G.alerts.map(a => `<tr><td style="width:1%;white-space:nowrap"><span class="chip ${lvl[a.level]}">${esc(a.level)}</span></td><td><b>${esc(a.title)}</b>${a.detail ? `<div class="faint small">${esc(a.detail)}</div>` : ""}</td></tr>`).join("")}</table></div>`;
+    const status = Object.values(G.state.status || {}).sort((a, b) => a.key.startsWith("hot") - b.key.startsWith("hot") || a.name.localeCompare(b.name));
+    h += `<div class="section-h"><h2>Right now</h2></div><div class="card" style="padding:4px 18px">${status.length ? status.map(s => {
+      const [cls, label] = GUARD_CHIPS[s.state] || ["", s.state];
+      const until = s.state === "timer" && s.until ? ` until ${hhmm(new Date(s.until * 1000))}` : "";
+      const canKeep = ["timer", "would-return", "failed"].includes(s.state);
+      return `<div class="setting" style="flex-wrap:wrap"><div class="l"><b>${esc(s.name)}</b><span>${esc(s.why)}</span></div><div class="row" style="justify-content:flex-end;flex-wrap:wrap;gap:6px;margin-left:auto"><span class="chip ${cls}">${label}${until}</span>${canKeep ? `<button class="btn sm" onclick="guardKeep('${s.key}')">Keep ${dur(st.minutes)} more</button>` : ""}</div></div>`;
+    }).join("") : `<div class="row" style="padding:13px 0"><span class="spin"></span><span class="small muted">Waiting for the hub's data…</span></div>`}</div>`;
+  }
+
+  let minuteOpts = "";
+  for (const m of [15, 30, 45, 60, 90, 120, 180, 240, 360, 480]) minuteOpts += `<option value="${m}" ${m === st.minutes ? "selected" : ""}>${dur(m)}</option>`;
+  let offOpts = "";
+  for (let v = 50; v <= 200; v += 5) offOpts += `<option value="${v}" ${v === st.off_temp ? "selected" : ""}>${(v / 10).toFixed(1)}°</option>`;
+  const covered = [...rooms().map(r => [`room-${r.id}`, r.Name]), ...(sec("HotWater") || []).map(w => [`hotwater-${w.id}`, "Hot water"])];
+  h += `<div class="section-h"><h2>Limit</h2></div><div class="card" style="padding:4px 18px">
+    <div class="setting"><div class="l"><b>Time limit</b><span>How long a room may heat above its schedule before going back</span></div><select onchange="saveGuard({minutes:+this.value})">${minuteOpts}</select></div>
+    <div class="setting"><div class="l"><b>Rooms without a schedule go back to</b><span>There's no schedule to go back to, so they go to this</span></div><select onchange="saveGuard({off_temp:+this.value})">${offOpts}</select></div>
+    <div class="setting"><div class="l"><b>Limit changes made here too</b><span>From this dashboard, Google Home, Apple Home, Alexa and AI assistants. Off: only the Wiser app, thermostats and Home Assistant are limited.</span></div>
+      <label class="switch"><input type="checkbox" ${st.skip_own ? "" : "checked"} onchange="saveGuard({skip_own:!this.checked})"><span></span></label></div>
+    ${covered.map(([k, n]) => `<div class="setting"><div class="l"><b>${esc(n)}</b><span>Covered by the waste guard</span></div><label class="switch"><input type="checkbox" ${exclude[k] ? "" : "checked"} onchange="saveGuard({cover:{key:'${k}',on:this.checked}})"><span></span></label></div>`).join("")}
+  </div>`;
+
+  let onOpts = "", schedOpts = "", dailyOpts = "";
+  for (let v = 100; v <= 250; v += 5) onOpts += `<option value="${v}" ${v === st.on_temp ? "selected" : ""}>${(v / 10).toFixed(1)}°</option>`;
+  for (let v = 2; v <= 24; v++) schedOpts += `<option value="${v}" ${v === st.schedule_hours ? "selected" : ""}>${v} hours</option>`;
+  for (let v = 1; v <= 23; v++) dailyOpts += `<option value="${v}" ${v === st.daily_hours ? "selected" : ""}>${v} hours</option>`;
+  const D = G.daily;
+  const busiest = D.busiestDay ? new Date(D.busiestDay + "T12:00").toLocaleDateString([], {weekday: "short", day: "numeric", month: "short"}) : "";
+  h += `<div class="section-h"><h2>Alarms</h2><span class="faint small">they only warn, never change anything</span></div><div class="card" style="padding:4px 18px">
+    <div class="setting"><div class="l"><b>A schedule counts as on from</b><span>Below this is a setback (16° overnight, say), not heating</span></div><select onchange="saveGuard({on_temp:+this.value})">${onOpts}</select></div>
+    <div class="setting"><div class="l"><b>Warn when a schedule stays on longer than</b><span>Across midnight too. Hot water counts from its on/off times.</span></div><select onchange="saveGuard({schedule_hours:+this.value})">${schedOpts}</select></div>
+    <div style="padding:0 0 13px">${G.preview.length ? G.preview.map(a => `<div class="callout" style="margin-top:6px"><b>${esc(a.title)}</b><div style="opacity:.85">${esc(a.detail)}</div></div>`).join("") : `<div class="row"><span class="chip good">No schedule stays on that long</span></div>`}</div>
+    <div class="setting"><div class="l"><b>Warn when the heating runs more than</b><span>In any 24 hours. ${D.usual ? `Your usual: <strong>${hm(D.usual)}</strong> a day; busiest: <strong>${hm(D.busiest)}</strong> (${esc(busiest)}).` : "There isn't a whole day of history yet."}</span></div><select onchange="saveGuard({daily_hours:+this.value})">${dailyOpts}</select></div>
+    ${D.days?.length ? `<div style="padding:0 0 13px">${dayBars(D.days, D.days.map(d => d.heating), hm, d => `${d.day}: ${hm(d.heating)}`)}</div>` : ""}
+  </div>`;
+  h += `<div class="section-h"><h2>Heating in any 24 hours, last 14 days</h2></div><div class="card">${trendChart(G.trend || [], st.daily_hours * 60)}</div>`;
+  if (G.matter) h += `<div class="section-h"><h2>Google Home, Apple Home and Alexa</h2></div><div class="card" style="padding:4px 18px">
+    <div class="setting"><div class="l"><b>Heating alert sensor</b><span>Always there while the guard is on; opens while one of its alerts is active. In Apple Home turn on its notifications; in Google Home or Alexa, add a routine that starts when it opens.</span></div>
+      <label class="switch"><input type="checkbox" ${st.matter_no_alert ? "" : "checked"} onchange="saveGuard({matter_no_alert:!this.checked})"><span></span></label></div>
+    <div class="setting"><div class="l"><b>Show what the alert says</b><span>A device named with the alert, like <i>Lounge back to 16°</i> or <i>Heating over 12h in 24h</i>, appears when it happens (up to three at a time) and goes when it clears. Google Home announces each as a new device, so the notification tells you what happened. Nothing should be tied to them.</span></div>
+      <label class="switch"><input type="checkbox" ${st.matter_text ? "checked" : ""} onchange="saveGuard({matter_text:this.checked})"><span></span></label></div>
+    <div class="setting"><div class="l"><b>Ask the apps to refresh after adding a device</b><span>When a device appears or goes while the apps are connected, the bridge closes their sessions politely so they subscribe again within a minute. Whether a new device then shows as online sooner is up to the app: Google Home took between 3 and 20 minutes either way in our tests, so this is off unless you want to try it.</span></div>
+      <label class="switch"><input type="checkbox" ${st.matter_refresh ? "checked" : ""} onchange="saveGuard({matter_refresh:this.checked})"><span></span></label></div>
+    <div class="setting"><div class="l"><b>Heating hours as a temperature</b><span>A sensor, <i>Heating hours (last 24h)</i>, that reads the heating time of the last 24 hours as degrees: 13.5° means 13.5 hours. Shown even with the guard off.</span></div>
+      <label class="switch"><input type="checkbox" ${st.matter_hours ? "checked" : ""} onchange="saveGuard({matter_hours:this.checked})"><span></span></label></div>
+  </div>`;
+
+  const ev = G.activity || [];
+  const evChip = {seen: "warn", heating: "heat", returned: "good", "would-return": "warn", kept: "cool", failed: "crit", error: "crit", back: ""};
+  h += `<div class="section-h"><h2>Activity</h2></div><div class="card">${ev.length ? `<table class="kv">${ev.map(e => `<tr><td style="width:1%;white-space:nowrap" class="small muted">${new Date(e.t * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"})}</td>
+      <td><b>${esc(e.name)}</b> <span class="chip ${evChip[e.kind] || ""}" style="margin-left:4px">${esc(e.kind.replace("-", " "))}</span><div class="small">${esc(e.text)}</div>${e.origin ? `<div class="faint xs">hub: ${esc(e.origin)}</div>` : ""}</td></tr>`).join("")}</table>` : `<p class="small muted" style="margin:0">Nothing yet. Changes above the schedule show up here.</p>`}</div>`;
+  return h;
+}
+
+// The 24-hour heating total on every hour of the recorded history, with the limit.
+function trendChart(points, limit) {
+  const H = 160, W = 1000;
+  if (points.length < 2) return `<div class="chart-empty" style="height:${H}px">The trend starts once a full day is recorded, and covers 14 days.</div>`;
+  const t1 = Date.now() / 1000, t0 = t1 - 14 * 86400;
+  const pts = points.filter(p => p.t >= t0);
+  const hi = Math.max(limit, ...pts.map(p => p.heating)) + 60;
+  const X = t => ((t - t0) / (t1 - t0) * W).toFixed(1), Y = v => (H - v / hi * H).toFixed(1);
+  let line = "";
+  pts.forEach((p, i) => { line += `${i === 0 || p.t - pts[i - 1].t > 2 * 3600 ? "M" : "L"}${X(p.t)} ${Y(p.heating)}`; });
+  S.charts.trend = {pts, t0, t1, rows: p => [[hm(p.heating), "heating in the 24 h before", "border-color:var(--heat)"], [hm(limit), "your limit", "border-top-style:dashed;border-color:var(--ink-3)"]]};
+  const vec = 'vector-effect="non-scaling-stroke"';
+  const stepH = hi <= 8 * 60 ? 2 : hi <= 16 * 60 ? 4 : 6, grid = [];
+  for (let v = stepH * 60; v < hi; v += stepH * 60) grid.push(v);
+  let labels = grid.map(v => `<span class="ylab num" style="top:${(Y(v) / H * 100).toFixed(1)}%">${v / 60}h</span>`).join("");
+  const d = new Date(t0 * 1000); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + 1);
+  for (let i = 0; d.getTime() / 1000 <= t1; d.setDate(d.getDate() + 1), i++) {
+    if (i % 2) continue;
+    labels += `<span class="xlab" style="left:${((d.getTime() / 1000 - t0) / (t1 - t0) * 100).toFixed(1)}%">${d.toLocaleDateString([], {weekday: "short", day: "numeric"})}</span>`;
+  }
+  const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">
+    ${grid.map(v => `<line x1="0" x2="${W}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)" ${vec}/>`).join("")}
+    <line x1="0" x2="${W}" y1="${Y(limit)}" y2="${Y(limit)}" stroke="var(--ink-3)" stroke-width="1.5" stroke-dasharray="4 4" ${vec}/>
+    <path d="${line}" fill="none" stroke="var(--heat)" stroke-width="2" stroke-linejoin="round" ${vec}/></svg>`;
+  const last = pts[pts.length - 1];
+  return `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px"><span class="small muted">Each point is the heating time in the 24 hours before it, worked out every hour.</span><span class="small">Now: <b>${hm(last.heating)}</b> · highest: <b>${hm(Math.max(...pts.map(p => p.heating)))}</b></span></div>
+    <div style="padding-left:28px;position:relative;margin-bottom:22px"><div class="chart" data-chart="trend" style="height:${H}px">${svg}${labels}<div class="xhair"></div></div></div>
+    <div class="legend"><span><i style="width:16px;border-top:2px solid var(--heat)"></i>Heating in 24 h</span><span><i style="width:16px;border-top:2px dashed var(--ink-3)"></i>Your limit (${hm(limit)})</span></div>`;
+}
+
 // ---------------- smart home (Matter) ----------------
 const MATTER_VENDORS = {0x6006: "Google Home", 0x1349: "Apple Home", 0x1217: "Amazon Alexa", 0x110A: "SmartThings"};
 function qrSvg(rows) {

@@ -22,6 +22,8 @@ you understand it, and you've tested it.
 4. **Run the checks locally** (see below) and **test it for real** where you can.
 5. **Commit** with a clear message: a short summary line in the imperative ("Add a 1-hour hot water boost
    switch"), a blank line, then *why* the change is needed and anything a reviewer should know.
+   If the change is something users will notice, add a line under **Unreleased** in
+   [CHANGELOG.md](CHANGELOG.md), in plain words. Releasing moves those lines under the new version.
 6. **Open a pull request** against `main` and fill in the template: what changed, why, and how you tested it.
    Link the issue (`Fixes #12`).
 7. **CI must be green.** Every check has to pass; if one fails, push a fix to the same branch.
@@ -50,6 +52,9 @@ node test/system.mjs ../wiser-dashboard                              # the whole
 
 These pair a real Matter controller with the bridge against a mock hub; mDNS must work on your machine (on macOS,
 allow Local Network access when asked).
+
+`matter/patches/` holds fixes to matter.js that aren't released yet; `npm ci` applies them (`patch-package`, run by
+`postinstall`). Each patch names the upstream change it comes from. Drop a patch once a release includes the fix.
 
 ## Testing against a real hub
 

@@ -92,6 +92,7 @@ func main() {
 	srv := &Server{hub: hub, store: store, poller: poller, history: history, health: health, configPath: *configPath, password: *password, listen: *listen,
 		labels: cfg.ChannelNames, alertSettings: cfg.Alerts}
 	srv.boost = cfg.Boost.withDefaults()
+	srv.guard = NewGuard(srv, filepath.Dir(*configPath), cfg.Guard)
 	srv.autoUpdate = cfg.AutoUpdate
 	srv.updater = NewUpdater(filepath.Dir(*configPath), func() { restarting.Store(true); shutdown() }, func() bool {
 		srv.mu.Lock()
@@ -114,9 +115,17 @@ func main() {
 	}
 
 	hub.SetTarget(cfg.HubIP, cfg.Secret)
+	dataPath := filepath.Join(filepath.Dir(*configPath), "hub-data.json")
+	if n := store.Load(dataPath, cfg.HubIP); n > 0 {
+		log.Printf("showing saved hub data until the hub answers (%d sections)", n)
+	}
+	var saver sync.WaitGroup
+	saver.Add(1)
+	go func() { defer saver.Done(); store.RunSaver(ctx, dataPath, hub) }()
 	go poller.Run(ctx)
 	go history.Run(ctx, store)
 	go health.Run(ctx, store, hub)
+	go srv.guard.Run(ctx)
 	go bootstrap(ctx, srv, cfg, !*noDiscover)
 	go srv.updater.Run(ctx)
 	var bg sync.WaitGroup
@@ -137,6 +146,7 @@ func main() {
 		log.Fatal(err)
 	}
 	bg.Wait() // let the Matter bridge save its state and stop
+	saver.Wait()
 	if restarting.Load() {
 		if err := relaunch(srv.updater.exe); err != nil {
 			log.Fatalf("starting the updated program: %v (start it again by hand)", err)

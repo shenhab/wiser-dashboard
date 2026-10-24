@@ -17,7 +17,7 @@ var mcpTools = []mcpTool{
 	// ---------------------------------------------------------------- read
 	{
 		name: "get_status", title: "Heating status", readOnly: true,
-		description: "Current state of every room (temperature, target, whether it's heating, what set the target and until when), the hot water, the boiler and away mode.",
+		description: "Current state of every room (temperature, target, whether it's heating, what set the target and until when), the hot water, the boiler, away mode, and what the waste guard is doing (when it's on).",
 		schema:      schema(nil, nil),
 		run: func(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
 			return s.mcpStatus()
@@ -82,7 +82,7 @@ var mcpTools = []mcpTool{
 	},
 	{
 		name: "get_alerts", title: "Alerts", readOnly: true,
-		description: "Current problems and warnings: hub offline, low batteries, weak signal, cold rooms, open windows, hub restarts, Wi-Fi trouble, wrong clock, pending changes, away mode, empty schedules.",
+		description: "Current problems and warnings: hub offline, low batteries, weak signal, cold rooms, open windows, hub restarts, Wi-Fi trouble, wrong clock, pending changes, away mode, empty schedules, and the waste guard's (a room returned to its schedule, a schedule on too long, too much heating in 24 hours).",
 		schema:      schema(nil, nil),
 		run: func(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
 			al := s.alerts()
@@ -494,10 +494,25 @@ func (s *Server) mcpStatus() (any, error) {
 	out["zones"] = zs
 	out["boiler_running"] = boilerOn
 
+	if g := s.guard.State(); g["mode"] != "" {
+		// What the waste guard is doing: why a room went back to its schedule, say.
+		var gs []any
+		for _, st := range g["status"].(map[string]guardStatus) {
+			item := map[string]any{"name": st.Name, "state": st.State, "why": st.Why}
+			if st.Until > 0 {
+				item["back_to_schedule_at"] = time.Unix(st.Until, 0).Format(time.RFC3339)
+			}
+			gs = append(gs, item)
+		}
+		out["waste_guard"] = map[string]any{"mode": g["mode"], "minutes_allowed_above_schedule": g["minutes"], "rooms": gs}
+	}
+
 	e := s.store.Snapshot()["Room"]
 	out["hub"] = map[string]any{
 		"data_age_seconds": int(time.Since(e.Fetched).Seconds()),
-		"fresh":            time.Since(e.Fetched) < staleAfter,
+		"fresh":            time.Since(e.Fetched) < staleAfter && !e.Restored,
+		// Saved from before the dashboard restarted; the hub hasn't answered yet.
+		"restored": e.Restored,
 	}
 	return out, nil
 }

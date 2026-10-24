@@ -1,6 +1,7 @@
 // wiser-matter is the Matter bridge that wiser-dashboard runs alongside itself.
 // It shows each Wiser room as a thermostat and the hot water as a plug to any
-// Matter controller (Google Home, Apple Home, Alexa, SmartThings).
+// Matter controller (Google Home, Apple Home, Alexa, SmartThings), and the
+// waste guard's alert as a contact sensor.
 //
 // It talks to the dashboard's hub-compatible API (/data/...) with the hub
 // secret, exactly as Home Assistant does. The dashboard sends its address and
@@ -12,9 +13,12 @@ import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import { ThermostatServer } from "@matter/main/behaviors/thermostat";
 import { Thermostat } from "@matter/main/clusters/thermostat";
+import { ContactSensorDevice } from "@matter/main/devices/contact-sensor";
 import { OnOffPlugInUnitDevice, OnOffPlugInUnitRequirements } from "@matter/main/devices/on-off-plug-in-unit";
+import { TemperatureSensorDevice } from "@matter/main/devices/temperature-sensor";
 import { ThermostatDevice } from "@matter/main/devices/thermostat";
 import { QrCode } from "@matter/main/types";
+import { SessionManager } from "@matter/protocol";
 import { randomInt } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -42,7 +46,9 @@ const port = Number(arg("udp-port", "5540"));
 
 // Matter's log goes to stderr so stdout carries only status lines.
 Logger.format = "plain";
-Logger.level = LogLevel.NOTICE;
+// WISER_MATTER_LOG=debug (or info) shows what controllers ask the bridge, for
+// investigating an app's behaviour; the dashboard forwards the lines to its log.
+Logger.level = ({ debug: LogLevel.DEBUG, info: LogLevel.INFO, warn: LogLevel.WARN } as Record<string, LogLevel>)[process.env.WISER_MATTER_LOG ?? ""] ?? LogLevel.NOTICE;
 Logger.destinations.default.write = (text: string) => void process.stderr.write(text + "\n");
 
 function report(msg: Record<string, unknown>) {
@@ -93,8 +99,28 @@ interface BoostSettings {
 }
 let boostSettings: BoostSettings = { minutes: 30, delta: 30, off: {} };
 
+// The waste guard's "Heating alert" sensor: there while the guard is on, open
+// while one of its alerts is active, so Apple Home can notify and Google Home
+// or Alexa routines can start on it. Optionally, up to three more sensors named
+// with the alerts themselves (Matter can't carry text, but a new device's name
+// shows up), and the last 24 hours' heating as a temperature sensor.
+interface AlertState {
+    enabled: boolean;
+    on: boolean;
+    texts: { id: string; text: string }[];
+    hours: number | null;
+    refresh: boolean; // ask the apps to subscribe again after a device is added or removed
+}
+let alertState: AlertState = { enabled: false, on: false, texts: [], hours: null, refresh: true };
+let alertReceived = false; // the dashboard has said which guard devices to show
+
 let dashboardURL = process.env.WISER_URL ?? "";
 let secret = process.env.WISER_SECRET ?? "";
+
+// Settings can arrive on stdin before the Matter node exists; they're kept and
+// the first sync applies them.
+let nodeReady = false;
+let syncChain: Promise<void> = Promise.resolve();
 
 createInterface({ input: process.stdin }).on("line", line => {
     try {
@@ -106,8 +132,24 @@ createInterface({ input: process.stdin }).on("line", line => {
             boostSettings = { ...boostSettings, ...msg.boost };
             syncSoon();
         }
-    } catch {
-        log("ignoring a bad line on stdin");
+        if (msg.alert && typeof msg.alert === "object") {
+            alertReceived = true;
+            alertState = {
+                enabled: !!msg.alert.enabled,
+                on: !!msg.alert.on,
+                // Each occurrence of an alert comes with its own id, so the apps
+                // announce it as a new device even when the text is the same.
+                texts: (Array.isArray(msg.alert.texts) ? msg.alert.texts : [])
+                    .map((t: any) => (typeof t === "string" ? { id: "", text: t } : { id: String(t?.id ?? ""), text: String(t?.text ?? "") }))
+                    .filter((t: { text: string }) => t.text)
+                    .slice(0, 3),
+                hours: typeof msg.alert.hours === "number" ? msg.alert.hours : null,
+                refresh: msg.alert.refresh !== false,
+            };
+            syncSoon();
+        }
+    } catch (e) {
+        log(`ignoring a bad line on stdin: ${(e as Error).message}: ${line.slice(0, 80)}`);
     }
 });
 // The dashboard closing our stdin means it has gone: stop with it.
@@ -117,7 +159,8 @@ async function hub(method: string, path: string, body?: unknown): Promise<any> {
     if (!dashboardURL || !secret) throw new Error("waiting for the dashboard");
     const res = await fetch(dashboardURL + path, {
         method,
-        headers: { SECRET: secret, "Content-Type": "application/json" },
+        // The dashboard tells our changes apart from Home Assistant's (waste guard).
+        headers: { SECRET: secret, "Content-Type": "application/json", "X-Wiser-Client": "matter" },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(60_000),
     });
@@ -172,10 +215,16 @@ class CommandOnOffServer extends OnOffPlugInUnitRequirements.OnOffServer {
 
 const RoomDevice = ThermostatDevice.with(BridgedDeviceBasicInformationServer, ThermostatServer.with(Thermostat.Feature.Heating));
 const HotWaterDevice = OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationServer, CommandOnOffServer);
+const AlertDevice = ContactSensorDevice.with(BridgedDeviceBasicInformationServer);
+const HoursDevice = TemperatureSensorDevice.with(BridgedDeviceBasicInformationServer);
 
 const rooms = new Map<number, Endpoint<typeof RoomDevice>>();
 const hotWater = new Map<number, Endpoint<typeof HotWaterDevice>>();
 const boosts = new Map<number, Endpoint<typeof HotWaterDevice>>(); // room id -> boost switch
+let alertSensor: Endpoint<typeof AlertDevice> | undefined;
+const alertTexts = new Map<string, Endpoint<typeof AlertDevice>>(); // endpoint id -> a sensor named with an alert
+let hoursSensor: Endpoint<typeof HoursDevice> | undefined;
+const HOURS_LABEL = "Heating hours (last 24h)";
 let lastDomain: any = null;
 const heldUntil = new Map<string, number>(); // endpoint id -> time its pending command settles
 const commandAt = new Map<string, number>(); // endpoint id -> time of its last command
@@ -194,6 +243,47 @@ function held(key: string) {
 
 function label(name: string) {
     return name.slice(0, 32); // Matter's limit for nodeLabel
+}
+
+// A device keeps its endpoint number when it's added back (the Matter spec
+// expects that of a bridge). The library forgets a deleted endpoint's number,
+// and Google Home ties a device to its number: added back under a new one, the
+// device showed as offline until Google's next rediscovery, up to 20 minutes.
+const numbersFile = join(storageDir, "endpoint-numbers.json");
+const numbers = new Map<string, number>();
+try {
+    for (const [id, n] of Object.entries(JSON.parse(readFileSync(numbersFile, "utf8")) as Record<string, number>)) {
+        if (Number.isInteger(n) && n > 1) numbers.set(id, n);
+    }
+} catch {}
+function numberFor(id: string): { number?: number } {
+    const n = numbers.get(id);
+    return n === undefined ? {} : { number: n };
+}
+// Google Home registers a device added while it's connected only at its next
+// structure sync, which a removal triggers at once but an addition doesn't. A
+// device that comes alive raises ReachableChanged, a structure event too; so a
+// device added while online starts unreachable and becomes reachable 3 s later.
+async function addToBridge(ep: Endpoint<any>) {
+    const announce = online && reachable;
+    await bridge.add(ep);
+    if (announce) {
+        await ep.set({ bridgedDeviceBasicInformation: { reachable: false } });
+        setTimeout(() => {
+            ep.set({ bridgedDeviceBasicInformation: { reachable: true } })
+                .then(() => log(`${ep.id} reported reachable`))
+                .catch(e => log(`${ep.id}: marking reachable failed: ${(e as Error).message}`));
+        }, 3_000);
+    }
+    if (typeof ep.number === "number" && numbers.get(ep.id) !== ep.number) {
+        numbers.set(ep.id, ep.number);
+        try {
+            writeFileSync(numbersFile, JSON.stringify(Object.fromEntries(numbers)), { mode: 0o600 });
+        } catch (e) {
+            log(`couldn't save endpoint numbers: ${(e as Error).message}`);
+        }
+    }
+    nudgeControllersSoon();
 }
 
 // toMatter turns the hub's tenths of a degree into Matter's hundredths.
@@ -223,6 +313,7 @@ function addRoom(room: any) {
     const id = `room-${room.id}`;
     const ep = new Endpoint(RoomDevice, {
         id,
+        ...numberFor(id),
         bridgedDeviceBasicInformation: {
             nodeLabel: label(room.Name ?? `Room ${room.id}`),
             productName: "Wiser room",
@@ -274,6 +365,7 @@ function addHotWater(hw: any) {
     const id = `hotwater-${hw.id}`;
     const ep = new Endpoint(HotWaterDevice, {
         id,
+        ...numberFor(id),
         bridgedDeviceBasicInformation: {
             nodeLabel: "Hot water",
             productName: "Wiser hot water",
@@ -305,6 +397,7 @@ function addBoost(room: any) {
     const id = `boost-${room.id}`;
     const ep = new Endpoint(HotWaterDevice, {
         id,
+        ...numberFor(id),
         bridgedDeviceBasicInformation: {
             nodeLabel: boostLabel(room),
             productName: "Wiser room boost",
@@ -362,7 +455,7 @@ let lastError = "";
 async function setReachable(value: boolean) {
     if (reachable === value) return;
     reachable = value;
-    for (const ep of [...rooms.values(), ...hotWater.values(), ...boosts.values()]) {
+    for (const ep of [...rooms.values(), ...hotWater.values(), ...boosts.values(), ...guardDevices()]) {
         await ep.set({ bridgedDeviceBasicInformation: { reachable: value } });
     }
     log(value ? "hub reachable again" : "hub unreachable");
@@ -374,13 +467,14 @@ async function syncBoost(room: any) {
         if (ep) {
             boosts.delete(room.id);
             await ep.delete();
+            nudgeControllersSoon();
             log(`removed ${boostLabel(room)}`);
         }
         return;
     }
     if (!ep) {
         ep = addBoost(room);
-        await bridge.add(ep);
+        await addToBridge(ep);
         watchBoost(room.id, ep);
         log(`added ${boostLabel(room)}`);
     }
@@ -389,14 +483,154 @@ async function syncBoost(room: any) {
     await ep.set(update);
 }
 
+// syncAlert adds, updates or removes the Heating alert sensor. A contact
+// sensor reads "closed" (true) normally and "open" (false) on an alert.
+async function syncAlert() {
+    if (!alertState.enabled) {
+        if (alertSensor) {
+            const ep = alertSensor;
+            alertSensor = undefined;
+            await ep.delete();
+            nudgeControllersSoon();
+            log("removed Heating alert");
+        }
+        return;
+    }
+    if (!alertSensor) {
+        alertSensor = new Endpoint(AlertDevice, {
+            id: "heating-alert",
+            ...numberFor("heating-alert"),
+            bridgedDeviceBasicInformation: {
+                nodeLabel: "Heating alert",
+                productName: "Wiser waste guard alert",
+                uniqueId: `${identity.serial}-heating-alert`,
+                reachable,
+            },
+            booleanState: { stateValue: !alertState.on },
+        });
+        await addToBridge(alertSensor);
+        log("added Heating alert");
+    }
+    if (alertSensor.state.booleanState.stateValue !== !alertState.on) {
+        await alertSensor.set({ booleanState: { stateValue: !alertState.on } });
+        log(alertState.on ? "Heating alert open" : "Heating alert closed");
+    }
+}
+
+// guardDevices are the waste guard's endpoints, for reachability and counts.
+function guardDevices(): Endpoint<any>[] {
+    return [...(alertSensor ? [alertSensor] : []), ...alertTexts.values(), ...(hoursSensor ? [hoursSensor] : [])];
+}
+
+// textId names an alert-text sensor after the alert's occurrence (or its
+// text, from an older dashboard), so the same alert keeps its device and a new
+// one gets a new device, whose name the apps then announce.
+function textId(t: { id: string; text: string }) {
+    if (/^[0-9a-z]{1,16}$/.test(t.id)) return `alert-text-${t.id}`;
+    let h = 0x811c9dc5;
+    for (const c of t.text) h = Math.imul(h ^ c.codePointAt(0)!, 0x01000193) >>> 0;
+    return `alert-text-${h.toString(16).padStart(8, "0")}`;
+}
+
+async function syncAlertTexts() {
+    const want = new Map(alertState.texts.map(t => [textId(t), t.text]));
+    for (const [id, ep] of alertTexts) {
+        if (!want.has(id)) {
+            alertTexts.delete(id);
+            await ep.delete();
+            nudgeControllersSoon();
+            log(`removed alert text device ${id}`);
+        }
+    }
+    for (const [id, text] of want) {
+        if (alertTexts.has(id)) continue;
+        const ep = new Endpoint(AlertDevice, {
+            id,
+            bridgedDeviceBasicInformation: {
+                nodeLabel: label(text),
+                productName: "Wiser waste guard alert text",
+                uniqueId: `${identity.serial}-${id}`,
+                reachable,
+            },
+            booleanState: { stateValue: false }, // open: it only exists while the alert does
+        });
+        alertTexts.set(id, ep);
+        await addToBridge(ep);
+        log(`added alert text device "${text}"`);
+    }
+}
+
+// syncHours shows the last 24 hours' heating as a temperature: 13.5° is 13.5 hours.
+async function syncHours() {
+    if (alertState.hours === null) {
+        if (hoursSensor) {
+            const ep = hoursSensor;
+            hoursSensor = undefined;
+            await ep.delete();
+            nudgeControllersSoon();
+            log("removed heating hours sensor");
+        }
+        return;
+    }
+    const value = Math.round(Math.min(24, Math.max(0, alertState.hours)) * 100);
+    if (!hoursSensor) {
+        hoursSensor = new Endpoint(HoursDevice, {
+            id: "heating-hours",
+            ...numberFor("heating-hours"),
+            bridgedDeviceBasicInformation: {
+                nodeLabel: HOURS_LABEL,
+                productName: "Wiser heating hours",
+                uniqueId: `${identity.serial}-heating-hours`,
+                reachable,
+            },
+            temperatureMeasurement: { measuredValue: value, minMeasuredValue: 0, maxMeasuredValue: 2400 },
+        });
+        await addToBridge(hoursSensor);
+        log("added heating hours sensor");
+    } else if (hoursSensor.state.temperatureMeasurement.measuredValue !== value) {
+        await hoursSensor.set({ temperatureMeasurement: { measuredValue: value } });
+    }
+}
+
+// A controller learns of an endpoint added after it subscribed only when it
+// subscribes again. Google Home does that on its own schedule and shows the
+// device as offline until then. Closing the controllers' sessions politely (the
+// Matter CloseSession message, as at shutdown) makes them subscribe again at
+// once, and the new subscription covers the new endpoint. Only once online:
+// at startup the devices are there before any controller connects.
+let online = false; // set once the node is online; cleared while it resets or shuts down
+let nudgeTimer: ReturnType<typeof setTimeout> | undefined;
+function nudgeControllersSoon() {
+    if (!online || !alertState.refresh) return;
+    clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(() => nudgeControllers().catch(e => log(`asking controllers to subscribe again failed: ${(e as Error).message}`)), 2_000);
+}
+async function nudgeControllers() {
+    if (!online) return;
+    const sessions = [...server.env.get(SessionManager).sessions].filter(s => !s.isPase && !s.isClosing);
+    if (!sessions.length) return;
+    log(`asking ${sessions.length} controller session(s) to subscribe again`);
+    for (const session of sessions) {
+        try {
+            await session.closeSubscriptions(true);
+            await session.initiateClose();
+        } catch (e) {
+            log(`closing a controller session failed: ${(e as Error).message}`);
+        }
+    }
+}
+
 // Syncs run one at a time: the poll timer and settings changes both start them.
-let syncChain: Promise<void> = Promise.resolve();
 function syncSoon() {
+    if (!nodeReady) return syncChain;
     syncChain = syncChain.then(sync).catch(e => log(`sync failed: ${(e as Error).message}`));
     return syncChain;
 }
 
 async function sync() {
+    await syncAlert();
+    await syncAlertTexts();
+    await syncHours();
     let domain: any;
     const requestedAt = Date.now();
     try {
@@ -416,7 +650,7 @@ async function sync() {
         let ep = rooms.get(room.id);
         if (!ep) {
             ep = addRoom(room);
-            await bridge.add(ep);
+            await addToBridge(ep);
             watchRoom(room.id, ep);
             log(`added room ${room.Name}`);
         }
@@ -443,7 +677,9 @@ async function sync() {
         if (!(domain.Room ?? []).some((r: any) => r.id === id)) {
             rooms.delete(id);
             await ep.delete();
+            nudgeControllersSoon();
             await boosts.get(id)?.delete();
+            nudgeControllersSoon();
             boosts.delete(id);
             log(`removed room ${id}`);
         }
@@ -453,7 +689,7 @@ async function sync() {
         let ep = hotWater.get(hw.id);
         if (!ep) {
             ep = addHotWater(hw);
-            await bridge.add(ep);
+            await addToBridge(ep);
             watchHotWater(hw.id, ep);
         }
         if (held(`hotwater-${hw.id}`)) continue;
@@ -496,7 +732,7 @@ function status() {
         qrCode: codes.qrPairingCode,
         qrRows: qrRows(codes.qrPairingCode),
         fabrics,
-        devices: rooms.size + hotWater.size + boosts.size,
+        devices: rooms.size + hotWater.size + boosts.size + guardDevices().length,
         hubReachable: reachable && lastGood > 0,
         error: lastError,
     });
@@ -504,8 +740,15 @@ function status() {
 
 async function reset() {
     log("removing all pairings");
+    online = false;
+    clearTimeout(nudgeTimer);
+    numbers.clear();
+    try {
+        writeFileSync(numbersFile, "{}", { mode: 0o600 });
+    } catch {}
     await server.erase();
     await server.start();
+    online = true;
     status();
 }
 
@@ -513,6 +756,8 @@ let closing = false;
 async function shutdown() {
     if (closing) return;
     closing = true;
+    online = false;
+    clearTimeout(nudgeTimer);
     try {
         await server.close();
     } finally {
@@ -528,12 +773,19 @@ server.lifecycle.commissioned.on(() => status());
 server.lifecycle.decommissioned.on(() => status());
 server.events.commissioning.fabricsChanged.on(() => status());
 
-// Add the devices before going online, so controllers see them at pairing.
+nodeReady = true;
+// Add the devices before going online, so controllers see them at pairing and
+// after every restart. That includes the waste guard's: Google Home can leave a
+// device added while it's connected unreachable for a long while, so wait
+// (briefly: an older dashboard never says) for the dashboard to say which.
 for (let i = 0; i < 12 && rooms.size === 0; i++) {
     await syncSoon();
     if (rooms.size === 0) await new Promise(r => setTimeout(r, POLL_MS));
 }
+for (let i = 0; i < 30 && !alertReceived; i++) await new Promise(r => setTimeout(r, 500));
+await syncSoon();
 await server.start();
+online = true;
 log(`Matter bridge ${VERSION} on UDP port ${port}, ${rooms.size} rooms`);
 status();
 
@@ -543,7 +795,7 @@ setInterval(async () => {
     // Pairing changes are also caught here: after the last controller removes
     // the bridge, matter.js resets the node without the lifecycle events.
     const fabrics = server.state.operationalCredentials.fabrics?.length ?? 0;
-    const now = JSON.stringify([reachable, lastGood > 0, lastError, rooms.size, hotWater.size, boosts.size, fabrics]);
+    const now = JSON.stringify([reachable, lastGood > 0, lastError, rooms.size, hotWater.size, boosts.size, guardDevices().length, fabrics]);
     if (now !== lastStatus) {
         lastStatus = now;
         status();

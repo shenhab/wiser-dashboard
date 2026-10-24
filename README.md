@@ -32,6 +32,7 @@ dashboard, Home Assistant, Google Home and AI assistants, so none of them has to
 |---|---|
 | 🏠 **A dashboard you'll use** | Every room at a glance, one-tap boosts and scenes, a schedule editor, insights and every hub setting, on your phone or computer. |
 | 📈 **History and insights** | 14 days of temperatures, heating time per day, **boiler starts and short cycling**, how fast each room warms up, and "ready at" estimates. |
+| 🛡️ **Waste guard** | Opt-in. A room turned up by hand and forgotten goes back to its schedule after an hour of heating, whoever turned it up; boosts and timed holds are respected. Plus alarms for schedules that never switch off and for too much heating in 24 hours. |
 | 🚨 **Alerts** | Hub offline, low batteries, weak signal, cold rooms, open windows, hub restarts, Wi-Fi trouble, wrong clock, and more, with phone notifications through Home Assistant. |
 | 🩺 **Hub health** | The hub's Wi-Fi signal, retransmissions, drops and restarts, logged over time, so you can see when the problem is the network, not the heating. |
 | 🔌 **Home Assistant, made reliable** | A drop-in, hub-compatible API that answers Home Assistant from the cache instantly, even when the hub's Wi-Fi is poor. |
@@ -73,6 +74,7 @@ dashboard, Home Assistant, Google Home and AI assistants, so none of them has to
 - **Advanced**:
   - **Hub settings**: comfort mode, early-start limit, away temperature, hot water while away, valve protection,
     daylight saving, and the boiler setup for reference.
+  - **Waste guard**: off, watch only or on; the time limit, what it covers, its alarms, and what it did.
   - **Google Home**: Matter pairing and boost switch settings.
   - **AI assistants**: MCP setup.
   - **Alerts**: alert settings, with a ready-made Home Assistant setup.
@@ -92,6 +94,28 @@ The hub keeps no history, so the dashboard records one sample a minute and keeps
 windows, hub restarts, Wi-Fi trouble, a wrong hub clock, changes stuck waiting for a device, away mode left on,
 and schedules that never heat. Each kind can be turned off, the minimum temperature is yours to set, and
 `GET /api/alerts` with the ready-made Home Assistant sensor sends them to your phone.
+
+### Waste guard
+
+Most wasted heating isn't the schedule: it's a room turned up by hand and forgotten. The waste guard (off by
+default, **Advanced → Waste guard**) watches every room and the hot water, whoever changed them: the Wiser app, a
+thermostat dial, Home Assistant, Google Home, an AI assistant or the dashboard itself.
+
+- A room whose target is **above what its schedule last set**, with no end chosen, may heat for **60 minutes**
+  (yours to set); then it goes back to the schedule's value. The room's mode never changes. A room without a
+  schedule goes to a temperature you choose (10° by default). Hot water switched on by hand works the same way.
+- **Left alone**: the schedule, comfort mode's early start, boosts and other timed changes, away mode, open windows,
+  and anything turned down.
+- **Keep for another hour** on the room card restarts the timer; so does turning it up again.
+- **Watch only** mode logs what it would have done, to try the rules on your house first.
+- **Alarms** (they never change anything): a schedule that keeps a room on for more than 12 hours, and more than
+  12 hours of heating in the last 24, with the figure shown large on the home page.
+- Its alerts reach the dashboard, Home Assistant, and Google Home, Apple Home and Alexa through a **Heating alert**
+  contact sensor that opens while one is active; optionally with devices named with the alerts, and the last 24
+  hours' heating as a temperature sensor.
+- A **14-day trend** of the heating time in any 24 hours, with your limit.
+
+The rules and how they work are in [docs/waste-guard.md](docs/waste-guard.md).
 
 **Hub health** logs the hub's Wi-Fi signal, TCP retransmissions, disconnects, failed reconnects, memory and
 restarts, so a flaky hub can be diagnosed with evidence.
@@ -118,6 +142,8 @@ A built-in Matter bridge puts your heating into the smart-home apps directly, **
 |---|---|
 | **Each room**, as a thermostat | Temperature, target and heat/off. A new target holds until the schedule's next change. |
 | **Hot water**, as a switch | On boosts it for 30 minutes; off turns it off until the schedule's next change. Shows whether it's actually heating. |
+| **Heating alert**, as a contact sensor (while the waste guard is on) | Opens while one of the waste guard's alerts is active, so Apple Home can notify you and Google Home or Alexa routines can start on it. Optionally, up to three more sensors named with the alerts themselves (*Lounge back to 16°*), there while each is active. |
+| **Heating hours (last 24h)**, as a temperature sensor (option) | The last 24 hours' heating time as degrees: 13.5° is 13.5 hours. |
 | **"<Room> heating boost"**, as a switch per room | On raises the room to **its current temperature + 3°** (never below its target) for **30 minutes**; off returns it to the schedule. Shows on while the hub is boosting, however the boost was started. Length, increase and which rooms get one are set on the Google Home page. |
 
 - **Voice and Gemini**: *"Hey Google, set Ground Floor to 21"*, *"turn on Upper Floor heating boost"*. For a phrase
@@ -258,7 +284,8 @@ journalctl -u wiser-dashboard -f        # its log
 Config, history, logs and Matter pairing live in `/var/lib/wiser-dashboard`. To keep them from an earlier
 install, stop the service, copy the old config folder's contents there, run
 `sudo chown -R wiser-dashboard: /var/lib/wiser-dashboard`, and start it again. A dashboard password goes in
-`/etc/wiser-dashboard.env` as `WISER_DASHBOARD_PASSWORD=...`. To upgrade, install the new binary over
+`/etc/wiser-dashboard.env` as `WISER_DASHBOARD_PASSWORD=...`; `WISER_MATTER_LOG=debug` there makes the Matter bridge
+log everything the apps ask it (lots), for looking into an app's behaviour. To upgrade, install the new binary over
 `/usr/local/bin/wiser-dashboard` and `sudo systemctl restart wiser-dashboard`; pairings and settings stay.
 
 ### Firewall

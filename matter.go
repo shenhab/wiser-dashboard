@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -79,6 +80,38 @@ type Matter struct {
 	stdin    io.WriteCloser
 	boost    BoostSettings
 	boostVer int // bumped on every change, so a running bridge gets it
+	alert    MatterAlert
+	alertVer int // 0 until the guard has said what to show
+}
+
+// MatterAlert is the waste guard's "Heating alert" contact sensor: shown while
+// the guard is on, open while one of its alerts is active.
+type MatterAlert struct {
+	Enabled bool         `json:"enabled"` // the Heating alert sensor is shown
+	On      bool         `json:"on"`
+	Texts   []MatterText `json:"texts"`           // devices named with the active alerts (option)
+	Hours   *float64     `json:"hours,omitempty"` // the last 24 hours' heating, as a temperature sensor (option)
+	Refresh bool         `json:"refresh"`         // ask the apps to subscribe again after a device is added or removed
+}
+
+// MatterText is a device named with an alert. Its ID is new for every
+// occurrence, so the apps announce it as a new device each time.
+type MatterText struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// SetAlert updates the guard's devices; a running bridge applies it within seconds.
+func (m *Matter) SetAlert(a MatterAlert) {
+	if m == nil {
+		return
+	}
+	a.On = a.On && a.Enabled
+	m.mu.Lock()
+	if m.alertVer == 0 || !reflect.DeepEqual(a, m.alert) {
+		m.alert, m.alertVer = a, m.alertVer+1
+	}
+	m.mu.Unlock()
 }
 
 // SetBoost changes the boost switches; a running bridge applies it within seconds.
@@ -220,7 +253,7 @@ func (m *Matter) runOnce(ctx context.Context) error {
 	// changes (setup page). The bridge uses the same secret as the hub.
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	sent, sentBoost := "", -1
+	sent, sentBoost, sentAlert := "", -1, -1
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
 	for {
@@ -237,6 +270,15 @@ func (m *Matter) runOnce(ctx context.Context) error {
 			msg, _ := json.Marshal(map[string]any{"boost": boost})
 			if m.send(msg) == nil {
 				sentBoost = ver
+			}
+		}
+		m.mu.Lock()
+		aVer, alert := m.alertVer, m.alert
+		m.mu.Unlock()
+		if aVer > 0 && aVer != sentAlert {
+			msg, _ := json.Marshal(map[string]any{"alert": alert})
+			if m.send(msg) == nil {
+				sentAlert = aVer
 			}
 		}
 		select {
@@ -292,5 +334,6 @@ func (m *Matter) State() map[string]any {
 		"error":     m.lastErr,
 		"status":    m.status,
 		"boost":     m.boost,
+		"alert":     m.alert,
 	}
 }

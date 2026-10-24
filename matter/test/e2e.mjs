@@ -5,7 +5,7 @@
 //
 //   node test/e2e.mjs path/to/wiser-matter
 import { Environment, Logger, LogLevel } from "@matter/main";
-import { BridgedDeviceBasicInformation, GeneralCommissioning, OnOff, Thermostat } from "@matter/main/clusters";
+import { BooleanState, BridgedDeviceBasicInformation, GeneralCommissioning, OnOff, TemperatureMeasurement, Thermostat } from "@matter/main/clusters";
 import { ManualPairingCodeCodec } from "@matter/main/types";
 import { CommissioningController } from "@project-chip/matter.js";
 import { spawn } from "node:child_process";
@@ -19,7 +19,15 @@ const BIN = process.argv[2] ?? "dist/wiser-matter";
 const SECRET = "test-secret";
 const PORT = 18080;
 const MATTER_PORT = 5560;
-Logger.level = LogLevel.WARN;
+// The controller's subscription and session events, kept for the report on a failure.
+Logger.level = LogLevel.INFO;
+const controllerLog = [];
+Logger.destinations.default.write = text => {
+    if (/WARN|ERROR|Subscription|Session|session|Peer|Closed|probe|Resumed|offline|online/.test(text)) {
+        controllerLog.push(text);
+        if (controllerLog.length > 80) controllerLog.shift();
+    }
+};
 
 let failures = 0;
 function check(name, ok, detail = "") {
@@ -73,7 +81,7 @@ const mock = createServer((req, res) => {
         const m = req.url.match(/^\/data\/domain\/(Room|HotWater)\/(\d+)$/);
         if (req.method === "PATCH" && m) {
             const data = JSON.parse(body);
-            patches.push({ path: req.url, data });
+            patches.push({ path: req.url, data, client: req.headers["x-wiser-client"] });
             const item = domain[m[1]].find(x => x.id === Number(m[2]));
             const ov = data.RequestOverride;
             if (m[1] === "Room" && ov.Type === "None") {
@@ -110,6 +118,8 @@ async function stopBridge(b) {
     return Promise.race([new Promise(r => b.on("exit", r)), sleep(10_000).then(() => "timeout")]);
 }
 let bridge = startBridge();
+// The waste guard is off: no guard devices, and nothing to wait for.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: false, on: false } }) + "\n");
 // First a wrong secret, to check it is refused, then the right one.
 bridge.stdin.write(JSON.stringify({ url: `http://127.0.0.1:${PORT}`, secret: "wrong" }) + "\n");
 await until(() => unauthorized > 0, 10_000);
@@ -165,9 +175,8 @@ await until(() => node.initialized, 30_000);
 const paired = await until(() => statuses.findLast(s => s.commissioned && s.fabrics?.length), 10_000);
 check("bridge reports it is paired", !!paired, paired && `fabric "${paired.fabrics[0].label}"`);
 
-const devices = node.getDevices().flatMap(d => [d, ...d.getChildEndpoints()]);
 async function byName(name) {
-    for (const d of devices) {
+    for (const d of node.getDevices().flatMap(d => [d, ...d.getChildEndpoints()])) {
         const info = d.getClusterClient(BridgedDeviceBasicInformation.Cluster);
         if (info && (await info.getNodeLabelAttribute()) === name) return d;
     }
@@ -301,6 +310,40 @@ check("new settings apply: +2° for 60 min", p?.data.RequestOverride.DurationMin
 bridge.stdin.write(JSON.stringify({ boost: { minutes: 30, delta: 30, off: {} } }) + "\n");
 const back = await until(() => statuses.findLast(s => s.devices === 5), 20_000);
 check("turning it back on brings the switch back", !!back);
+const upperBoostAgain = await until(async () => { const d = await byName("Upper Floor heating boost"); return d && d.number !== upperBoost.number ? null : d; }, 60_000);
+check("the switch comes back with the same endpoint number", upperBoostAgain?.number === upperBoost.number, `${upperBoost.number} -> ${upperBoostAgain?.number}`);
+
+check("the bridge marks its requests for the waste guard", patches.every(x => x.client === "matter"), JSON.stringify(patches.map(x => x.client)));
+
+// The waste guard's Heating alert: a contact sensor, closed normally, open on an alert.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: false } }) + "\n");
+check("turning the waste guard on adds the Heating alert", !!(await until(() => statuses.findLast(s => s.devices === 6), 20_000)));
+const alertDev = await until(() => byName("Heating alert"), 60_000);
+const alertState = alertDev?.getClusterClient(BooleanState.Cluster);
+check("Heating alert reads closed with no alert", !!(await until(async () => alertState && (await alertState.getStateValueAttribute(true)) === true, 20_000)), alertDev ? "" : "controller didn't see the device");
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true } }) + "\n");
+check("an alert opens the Heating alert", !!(await until(async () => (await alertState?.getStateValueAttribute(true)) === false, 20_000)));
+// Options: alert texts as device names, and the 24 hours' heating as a temperature.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "a1", text: "Lounge back to 16°" }], hours: 13.3 } }) + "\n");
+check("alert text and hours devices are added", !!(await until(() => statuses.findLast(s => s.devices === 8), 20_000)));
+check("an alert text device is named with the alert", !!(await until(() => byName("Lounge back to 16°"), 60_000)));
+check("the bridge asks controllers to subscribe again after adding devices", !!(await until(() => bridgeLog.includes("controller session(s) to subscribe again"), 10_000)));
+const hoursDev = await until(() => byName("Heating hours (last 24h)"), 60_000);
+const hoursTemp = hoursDev?.getClusterClient(TemperatureMeasurement.Cluster);
+check("the hours sensor shows 13.3 h as 13.3°", (await hoursTemp?.getMeasuredValueAttribute(true)) === 1330, String(await hoursTemp?.getMeasuredValueAttribute(true)));
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "b2", text: "Heating over 12h in 24h" }], hours: 14 } }) + "\n");
+check("a new alert replaces the text device", !!(await until(async () => (await byName("Heating over 12h in 24h")) && !(await byName("Lounge back to 16°")), 30_000)));
+// The same text again, as a new occurrence: a new device, so the apps announce it.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "c3", text: "Heating over 12h in 24h" }], hours: 14 } }) + "\n");
+check("a repeat of the same alert is a new device", !!(await until(() => bridgeLog.includes("removed alert text device alert-text-b2") && bridgeLog.includes("added alert text device"), 20_000)));
+// Only the alert texts, without the permanent Heating alert.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: false, on: true, texts: [{ id: "c3", text: "Heating over 12h in 24h" }], hours: 14 } }) + "\n");
+check("the Heating alert can be hidden while alert texts show", !!(await until(async () => !(await byName("Heating alert")) && (await byName("Heating over 12h in 24h")), 30_000)));
+check("the hours sensor follows", !!(await until(async () => (await hoursTemp?.getMeasuredValueAttribute(true)) === 1400, 20_000)));
+bridge.stdin.write(JSON.stringify({ alert: { enabled: false, on: false, texts: [], hours: 14 } }) + "\n");
+check("the hours sensor stays with the guard off", !!(await until(() => statuses.findLast(s => s.devices === 6), 20_000)));
+bridge.stdin.write(JSON.stringify({ alert: { enabled: false, on: false } }) + "\n");
+check("turning the waste guard off removes the Heating alert", !!(await until(() => statuses.findLast(s => s.devices === 5), 20_000)));
 
 // Changes on the hub side reach the controller (held values settle after 20 s).
 domain.Room[0].CalculatedTemperature = 230;
@@ -314,7 +357,10 @@ check("no storage left unclosed", !bridgeLog.includes("was not closed"));
 const before = statuses.length;
 bridge = startBridge();
 bridge.stdin.write(JSON.stringify({ url: `http://127.0.0.1:${PORT}`, secret: SECRET }) + "\n");
+// This time the guard is on: its sensor must be there before the bridge goes online.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: false } }) + "\n");
 const again = await until(() => statuses.slice(before).find(s => s.devices >= 5), 60_000);
+check("after a restart the Heating alert is there from the start", again?.devices === 6, `${again?.devices} devices`);
 check("after a restart the bridge is still paired", again?.commissioned === true && again?.fabrics?.length === 1);
 domain.Room[1].CalculatedTemperature = 185;
 const reconnected = await until(async () => {
@@ -329,6 +375,9 @@ patches.length = 0;
 await hwOnOff.on();
 p = await until(() => patches.find(x => x.path === "/data/domain/HotWater/2"));
 check("commands work after the restart", p?.data.RequestOverride.SetPoint === 1100);
+// The bridge announced its shutdown, so the controller drops the old subscription within half a minute and
+// subscribes again (patches/@matter+node: without it, it waits out the subscription timeout, minutes).
+check("the controller sees the Heating alert soon after the restart", !!(await until(() => byName("Heating alert"), 60_000)));
 
 // Unpairing
 await node.decommission();
@@ -342,6 +391,6 @@ check("bridge exits when the dashboard goes away", code === 0, `exit ${code}`);
 
 mock.close();
 rmSync(storage, { recursive: true, force: true });
-if (failures) console.log("\n--- bridge log ---\n" + bridgeLog.split("\n").slice(-40).join("\n"));
+if (failures) console.log("\n--- controller log ---\n" + controllerLog.join("\n") + "\n--- bridge log ---\n" + bridgeLog.split("\n").slice(-40).join("\n"));
 console.log(failures ? `\n${failures} FAILED` : "\nALL PASSED");
 process.exit(failures ? 1 : 0);

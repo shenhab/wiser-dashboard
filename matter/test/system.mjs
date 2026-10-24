@@ -165,7 +165,14 @@ check("the bridge drops Upper Floor's boost switch", !!fewer, `${devicesBefore} 
 const bad = await (await fetch(`http://${DASH}/api/matter/boost`, { method: "POST", body: JSON.stringify({ minutes: 1000, delta: 20 }) })).json();
 check("out-of-range settings are refused", bad.ok === false);
 
+// The waste guard: turning it on adds the Heating alert sensor, off removes it.
+const guardPost = async body => (await fetch(`http://${DASH}/api/guard/settings`, { method: "POST", body: JSON.stringify(body) })).json();
+const withoutAlert = (await api("/api/matter")).status.devices;
+check("waste guard settings are accepted", (await guardPost({ mode: "watch" })).ok === true);
+check("the waste guard adds the Heating alert to the bridge", !!(await until(async () => (await api("/api/matter")).status.devices === withoutAlert + 1, 30_000)));
+
 // ---------------------------------------------------------------- restart the whole app
+// (with the waste guard still on: its sensor must be there as the bridge goes online)
 let exit = await stopApp(app);
 check("dashboard stops cleanly with the bridge", exit === 0, `exit ${exit}`);
 check("bridge shut down with it", /bridge started/.test(appLog) && !/was not closed/.test(appLog));
@@ -175,11 +182,14 @@ const again = await until(async () => {
     return m.status?.devices >= 3 && m;
 }, 90_000);
 check("after restarting the app it is still paired", again?.status?.commissioned === true);
+check("after restarting the app the Heating alert is there from the start", again?.status?.devices === withoutAlert + 1, `${again?.status?.devices} devices`);
 const kept = await until(async () => {
     const m = await api("/api/matter");
-    return m.boost?.minutes === 60 && m.boost?.off?.["1"] === true && m.status?.devices === devicesBefore - 1;
+    return m.boost?.minutes === 60 && m.boost?.off?.["1"] === true && m.status?.devices === devicesBefore - 1 + 1;
 }, 30_000);
 check("boost settings survive the restart", !!kept);
+await guardPost({ mode: "" });
+check("turning the waste guard off removes it", !!(await until(async () => (await api("/api/matter")).status.devices === withoutAlert, 30_000)));
 hub.Room[1].CalculatedTemperature = 175;
 const fresh = await until(async () => (await ground.getLocalTemperatureAttribute(true)) === 1750, 120_000);
 check("controller reconnects and sees new hub data", !!fresh);
