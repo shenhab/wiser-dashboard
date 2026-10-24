@@ -27,9 +27,10 @@ new version's heading.
   answers.
 
 ### Fixed
-- A device the Matter bridge adds back (a boost switch turned off and on in settings, the waste guard's sensors) keeps
-  its endpoint number, so Google Home shows it online at once instead of offline until its next rediscovery (minutes
-  to twenty).
+- A device the Matter bridge adds while the apps are connected (an alert text, a boost switch turned on in settings,
+  the waste guard's sensors) shows as online in Google Home within a minute instead of offline until Google's next
+  rediscovery (minutes to twenty): the bridge announces it as newly reachable, and a device added back keeps its
+  endpoint number.
 - The Matter bridge no longer logs "ignoring a bad line on stdin" twice at every start: the dashboard's first settings
   arrived before the bridge was ready and were kept, but the sync they asked for threw.
 

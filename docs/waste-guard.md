@@ -109,11 +109,15 @@ The alarms can also be silenced one by one under Advanced → Alerts, like every
   - `longestOn` finds the longest stretch a schedule keeps a room on; `heatingTotals` adds up the last 24 hours.
 - `guard_run.go` runs after every poll (about every 20 seconds). It keeps the timers in `guard.json` next to the config,
   so a restart or an update doesn't reset them, and appends what it saw and did to `guard.jsonl` (14 days).
-- Google Home ties a bridged device to its endpoint number. The library forgets a deleted endpoint's number, so a
-  device added back got a new one and Google showed its old entry as offline until its next rediscovery, 3 to 20
-  minutes later, with no event at the bridge in between (Google's hubs receive the new endpoint's data within a
-  second and acknowledge it). So the bridge remembers each device's number (`endpoint-numbers.json` in its state
-  directory) and asks for it when the device is added back; alert texts are new devices and get new numbers. The option "Ask the apps to refresh
+- Google Home registers a device added while it's connected only at its next structure sync. A removal triggers that
+  sync at once; an addition doesn't, so a new device showed as offline until the next removal or Google's periodic
+  sync, 3 to 20 minutes later, although Google's hubs receive the new endpoint's data within a second. A device that
+  comes alive raises the Matter ReachableChanged event, which triggers the sync too: so a device added while online
+  starts unreachable and is marked reachable 3 seconds later, and Google shows it online within a minute (tested on
+  a real Google Home fabric). Google also ties a device to its endpoint number, which the library forgets when the
+  endpoint is deleted; the bridge remembers each device's number (`endpoint-numbers.json` in its state directory) and
+  asks for it when the device is added back, so a returning device isn't a new one to Google. Alert texts are new
+  devices and get new numbers. The option "Ask the apps to refresh
   after adding a device" closes the controllers' sessions politely (CloseSession, as at shutdown) after a device is
   added or removed, so they subscribe again within a minute; it did not shorten the time to "online" in our tests, so
   it's off by default. Devices that exist when the bridge starts are the ones Google keeps online reliably.

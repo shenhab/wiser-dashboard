@@ -260,8 +260,21 @@ function numberFor(id: string): { number?: number } {
     const n = numbers.get(id);
     return n === undefined ? {} : { number: n };
 }
+// Google Home registers a device added while it's connected only at its next
+// structure sync, which a removal triggers at once but an addition doesn't. A
+// device that comes alive raises ReachableChanged, a structure event too; so a
+// device added while online starts unreachable and becomes reachable 3 s later.
 async function addToBridge(ep: Endpoint<any>) {
+    const announce = online && reachable;
     await bridge.add(ep);
+    if (announce) {
+        await ep.set({ bridgedDeviceBasicInformation: { reachable: false } });
+        setTimeout(() => {
+            ep.set({ bridgedDeviceBasicInformation: { reachable: true } })
+                .then(() => log(`${ep.id} reported reachable`))
+                .catch(e => log(`${ep.id}: marking reachable failed: ${(e as Error).message}`));
+        }, 3_000);
+    }
     if (typeof ep.number === "number" && numbers.get(ep.id) !== ep.number) {
         numbers.set(ep.id, ep.number);
         try {
