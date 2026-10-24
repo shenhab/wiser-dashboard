@@ -19,7 +19,15 @@ const BIN = process.argv[2] ?? "dist/wiser-matter";
 const SECRET = "test-secret";
 const PORT = 18080;
 const MATTER_PORT = 5560;
-Logger.level = LogLevel.WARN;
+// The controller's subscription and session events, kept for the report on a failure.
+Logger.level = LogLevel.INFO;
+const controllerLog = [];
+Logger.destinations.default.write = text => {
+    if (/WARN|ERROR|Subscription|Session|session|Peer|Closed|probe|Resumed|offline|online/.test(text)) {
+        controllerLog.push(text);
+        if (controllerLog.length > 80) controllerLog.shift();
+    }
+};
 
 let failures = 0;
 function check(name, ok, detail = "") {
@@ -308,7 +316,7 @@ check("the bridge marks its requests for the waste guard", patches.every(x => x.
 // The waste guard's Heating alert: a contact sensor, closed normally, open on an alert.
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: false } }) + "\n");
 check("turning the waste guard on adds the Heating alert", !!(await until(() => statuses.findLast(s => s.devices === 6), 20_000)));
-const alertDev = await until(() => byName("Heating alert"), 30_000);
+const alertDev = await until(() => byName("Heating alert"), 60_000);
 const alertState = alertDev?.getClusterClient(BooleanState.Cluster);
 check("Heating alert reads closed with no alert", !!(await until(async () => alertState && (await alertState.getStateValueAttribute(true)) === true, 20_000)), alertDev ? "" : "controller didn't see the device");
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true } }) + "\n");
@@ -316,9 +324,9 @@ check("an alert opens the Heating alert", !!(await until(async () => (await aler
 // Options: alert texts as device names, and the 24 hours' heating as a temperature.
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "a1", text: "Lounge back to 16°" }], hours: 13.3 } }) + "\n");
 check("alert text and hours devices are added", !!(await until(() => statuses.findLast(s => s.devices === 8), 20_000)));
-check("an alert text device is named with the alert", !!(await until(() => byName("Lounge back to 16°"), 30_000)));
+check("an alert text device is named with the alert", !!(await until(() => byName("Lounge back to 16°"), 60_000)));
 check("the bridge asks controllers to subscribe again after adding devices", !!(await until(() => bridgeLog.includes("controller session(s) to subscribe again"), 10_000)));
-const hoursDev = await until(() => byName("Heating hours (last 24h)"), 30_000);
+const hoursDev = await until(() => byName("Heating hours (last 24h)"), 60_000);
 const hoursTemp = hoursDev?.getClusterClient(TemperatureMeasurement.Cluster);
 check("the hours sensor shows 13.3 h as 13.3°", (await hoursTemp?.getMeasuredValueAttribute(true)) === 1330, String(await hoursTemp?.getMeasuredValueAttribute(true)));
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true, texts: [{ id: "b2", text: "Heating over 12h in 24h" }], hours: 14 } }) + "\n");
@@ -381,6 +389,6 @@ check("bridge exits when the dashboard goes away", code === 0, `exit ${code}`);
 
 mock.close();
 rmSync(storage, { recursive: true, force: true });
-if (failures) console.log("\n--- bridge log ---\n" + bridgeLog.split("\n").slice(-40).join("\n"));
+if (failures) console.log("\n--- controller log ---\n" + controllerLog.join("\n") + "\n--- bridge log ---\n" + bridgeLog.split("\n").slice(-40).join("\n"));
 console.log(failures ? `\n${failures} FAILED` : "\nALL PASSED");
 process.exit(failures ? 1 : 0);

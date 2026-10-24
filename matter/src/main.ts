@@ -117,6 +117,11 @@ let alertReceived = false; // the dashboard has said which guard devices to show
 let dashboardURL = process.env.WISER_URL ?? "";
 let secret = process.env.WISER_SECRET ?? "";
 
+// Settings can arrive on stdin before the Matter node exists; they're kept and
+// the first sync applies them.
+let nodeReady = false;
+let syncChain: Promise<void> = Promise.resolve();
+
 createInterface({ input: process.stdin }).on("line", line => {
     try {
         const msg = JSON.parse(line);
@@ -143,8 +148,8 @@ createInterface({ input: process.stdin }).on("line", line => {
             };
             syncSoon();
         }
-    } catch {
-        log("ignoring a bad line on stdin");
+    } catch (e) {
+        log(`ignoring a bad line on stdin: ${(e as Error).message}: ${line.slice(0, 80)}`);
     }
 });
 // The dashboard closing our stdin means it has gone: stop with it.
@@ -551,14 +556,15 @@ async function syncHours() {
 // Matter CloseSession message, as at shutdown) makes them subscribe again at
 // once, and the new subscription covers the new endpoint. Only once online:
 // at startup the devices are there before any controller connects.
-let online = false;
+let online = false; // set once the node is online; cleared while it resets or shuts down
 let nudgeTimer: ReturnType<typeof setTimeout> | undefined;
 function nudgeControllersSoon() {
     if (!online || !alertState.refresh) return;
     clearTimeout(nudgeTimer);
-    nudgeTimer = setTimeout(() => void nudgeControllers(), 2_000);
+    nudgeTimer = setTimeout(() => nudgeControllers().catch(e => log(`asking controllers to subscribe again failed: ${(e as Error).message}`)), 2_000);
 }
 async function nudgeControllers() {
+    if (!online) return;
     const sessions = [...server.env.get(SessionManager).sessions].filter(s => !s.isPase && !s.isClosing);
     if (!sessions.length) return;
     log(`asking ${sessions.length} controller session(s) to subscribe again`);
@@ -573,8 +579,8 @@ async function nudgeControllers() {
 }
 
 // Syncs run one at a time: the poll timer and settings changes both start them.
-let syncChain: Promise<void> = Promise.resolve();
 function syncSoon() {
+    if (!nodeReady) return syncChain;
     syncChain = syncChain.then(sync).catch(e => log(`sync failed: ${(e as Error).message}`));
     return syncChain;
 }
@@ -694,8 +700,11 @@ function status() {
 
 async function reset() {
     log("removing all pairings");
+    online = false;
+    clearTimeout(nudgeTimer);
     await server.erase();
     await server.start();
+    online = true;
     status();
 }
 
@@ -703,6 +712,8 @@ let closing = false;
 async function shutdown() {
     if (closing) return;
     closing = true;
+    online = false;
+    clearTimeout(nudgeTimer);
     try {
         await server.close();
     } finally {
@@ -718,6 +729,7 @@ server.lifecycle.commissioned.on(() => status());
 server.lifecycle.decommissioned.on(() => status());
 server.events.commissioning.fabricsChanged.on(() => status());
 
+nodeReady = true;
 // Add the devices before going online, so controllers see them at pairing and
 // after every restart. That includes the waste guard's: Google Home can leave a
 // device added while it's connected unreachable for a long while, so wait
