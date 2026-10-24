@@ -108,6 +108,9 @@ The alarms can also be silenced one by one under Advanced → Alerts, like every
   - `longestOn` finds the longest stretch a schedule keeps a room on; `heatingTotals` adds up the last 24 hours.
 - `guard_run.go` runs after every poll (about every 20 seconds). It keeps the timers in `guard.json` next to the config,
   so a restart or an update doesn't reset them, and appends what it saw and did to `guard.jsonl` (14 days).
+- The guard takes its first look as soon as the dashboard starts, and the Matter bridge waits for it (up to 15 seconds)
+  before going online. So the Heating alert and the hours sensor exist when Google Home reconnects after a restart or
+  an update, like the rooms do; Google can leave a device added while it's connected unreachable for a long while.
 - Returning a room goes through the same high-priority queue as every other command. If the hub still shows the change
   two minutes later the guard tries again, up to three times, then raises an alert.
 - What counts as "timed" comes from the hub: timed overrides report `SetpointOrigin: FromBoost` (rooms) or a

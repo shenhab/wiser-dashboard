@@ -531,3 +531,18 @@ func TestStampAlarms(t *testing.T) {
 		t.Errorf("after a restart: %v", again.alarmSince)
 	}
 }
+
+func TestMatterAlertReadyOnFirstSet(t *testing.T) {
+	m := NewMatter(NewHub(), "", t.TempDir(), 0, "127.0.0.1:0")
+	if m.alertVer != 0 {
+		t.Fatal("the bridge must not be told anything before the guard speaks")
+	}
+	m.SetAlert(MatterAlert{}) // the guard off: still the answer the bridge waits for
+	if m.alertVer != 1 {
+		t.Errorf("first SetAlert: version %d, want 1", m.alertVer)
+	}
+	m.SetAlert(MatterAlert{})
+	if m.alertVer != 1 {
+		t.Errorf("an unchanged SetAlert bumped the version to %d", m.alertVer)
+	}
+}

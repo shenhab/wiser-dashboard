@@ -110,6 +110,8 @@ async function stopBridge(b) {
     return Promise.race([new Promise(r => b.on("exit", r)), sleep(10_000).then(() => "timeout")]);
 }
 let bridge = startBridge();
+// The waste guard is off: no guard devices, and nothing to wait for.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: false, on: false } }) + "\n");
 // First a wrong secret, to check it is refused, then the right one.
 bridge.stdin.write(JSON.stringify({ url: `http://127.0.0.1:${PORT}`, secret: "wrong" }) + "\n");
 await until(() => unauthorized > 0, 10_000);
@@ -344,7 +346,10 @@ check("no storage left unclosed", !bridgeLog.includes("was not closed"));
 const before = statuses.length;
 bridge = startBridge();
 bridge.stdin.write(JSON.stringify({ url: `http://127.0.0.1:${PORT}`, secret: SECRET }) + "\n");
+// This time the guard is on: its sensor must be there before the bridge goes online.
+bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: false } }) + "\n");
 const again = await until(() => statuses.slice(before).find(s => s.devices >= 5), 60_000);
+check("after a restart the Heating alert is there from the start", again?.devices === 6, `${again?.devices} devices`);
 check("after a restart the bridge is still paired", again?.commissioned === true && again?.fabrics?.length === 1);
 domain.Room[1].CalculatedTemperature = 185;
 const reconnected = await until(async () => {

@@ -108,6 +108,7 @@ interface AlertState {
     hours: number | null;
 }
 let alertState: AlertState = { enabled: false, on: false, texts: [], hours: null };
+let alertReceived = false; // the dashboard has said which guard devices to show
 
 let dashboardURL = process.env.WISER_URL ?? "";
 let secret = process.env.WISER_SECRET ?? "";
@@ -123,6 +124,7 @@ createInterface({ input: process.stdin }).on("line", line => {
             syncSoon();
         }
         if (msg.alert && typeof msg.alert === "object") {
+            alertReceived = true;
             alertState = {
                 enabled: !!msg.alert.enabled,
                 on: !!msg.alert.on,
@@ -672,11 +674,16 @@ server.lifecycle.commissioned.on(() => status());
 server.lifecycle.decommissioned.on(() => status());
 server.events.commissioning.fabricsChanged.on(() => status());
 
-// Add the devices before going online, so controllers see them at pairing.
+// Add the devices before going online, so controllers see them at pairing and
+// after every restart. That includes the waste guard's: Google Home can leave a
+// device added while it's connected unreachable for a long while, so wait
+// (briefly: an older dashboard never says) for the dashboard to say which.
 for (let i = 0; i < 12 && rooms.size === 0; i++) {
     await syncSoon();
     if (rooms.size === 0) await new Promise(r => setTimeout(r, POLL_MS));
 }
+for (let i = 0; i < 30 && !alertReceived; i++) await new Promise(r => setTimeout(r, 500));
+await syncSoon();
 await server.start();
 log(`Matter bridge ${VERSION} on UDP port ${port}, ${rooms.size} rooms`);
 status();

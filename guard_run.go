@@ -208,6 +208,9 @@ func (g *Guard) SetSettings(s GuardSettings) {
 
 // Run checks the house every few seconds until ctx ends.
 func (g *Guard) Run(ctx context.Context) {
+	// Look once straight away: the Matter bridge waits for the guard's devices
+	// before going online, so controllers see them like any other device.
+	g.tick(ctx, time.Now())
 	t := time.NewTicker(g.interval)
 	defer t.Stop()
 	for {

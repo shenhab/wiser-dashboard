@@ -81,7 +81,7 @@ type Matter struct {
 	boost    BoostSettings
 	boostVer int // bumped on every change, so a running bridge gets it
 	alert    MatterAlert
-	alertVer int
+	alertVer int // 0 until the guard has said what to show
 }
 
 // MatterAlert is the waste guard's "Heating alert" contact sensor: shown while
@@ -107,7 +107,7 @@ func (m *Matter) SetAlert(a MatterAlert) {
 	}
 	a.On = a.On && a.Enabled
 	m.mu.Lock()
-	if !reflect.DeepEqual(a, m.alert) {
+	if m.alertVer == 0 || !reflect.DeepEqual(a, m.alert) {
 		m.alert, m.alertVer = a, m.alertVer+1
 	}
 	m.mu.Unlock()
@@ -274,7 +274,7 @@ func (m *Matter) runOnce(ctx context.Context) error {
 		m.mu.Lock()
 		aVer, alert := m.alertVer, m.alert
 		m.mu.Unlock()
-		if aVer != sentAlert {
+		if aVer > 0 && aVer != sentAlert {
 			msg, _ := json.Marshal(map[string]any{"alert": alert})
 			if m.send(msg) == nil {
 				sentAlert = aVer
