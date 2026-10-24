@@ -245,6 +245,34 @@ function label(name: string) {
     return name.slice(0, 32); // Matter's limit for nodeLabel
 }
 
+// A device keeps its endpoint number when it's added back (the Matter spec
+// expects that of a bridge). The library forgets a deleted endpoint's number,
+// and Google Home ties a device to its number: added back under a new one, the
+// device showed as offline until Google's next rediscovery, up to 20 minutes.
+const numbersFile = join(storageDir, "endpoint-numbers.json");
+const numbers = new Map<string, number>();
+try {
+    for (const [id, n] of Object.entries(JSON.parse(readFileSync(numbersFile, "utf8")) as Record<string, number>)) {
+        if (Number.isInteger(n) && n > 1) numbers.set(id, n);
+    }
+} catch {}
+function numberFor(id: string): { number?: number } {
+    const n = numbers.get(id);
+    return n === undefined ? {} : { number: n };
+}
+async function addToBridge(ep: Endpoint<any>) {
+    await bridge.add(ep);
+    if (typeof ep.number === "number" && numbers.get(ep.id) !== ep.number) {
+        numbers.set(ep.id, ep.number);
+        try {
+            writeFileSync(numbersFile, JSON.stringify(Object.fromEntries(numbers)), { mode: 0o600 });
+        } catch (e) {
+            log(`couldn't save endpoint numbers: ${(e as Error).message}`);
+        }
+    }
+    nudgeControllersSoon();
+}
+
 // toMatter turns the hub's tenths of a degree into Matter's hundredths.
 function toMatter(tenths: number) {
     return Math.min(MAX_SETPOINT, Math.max(MIN_SETPOINT, tenths * 10));
@@ -272,6 +300,7 @@ function addRoom(room: any) {
     const id = `room-${room.id}`;
     const ep = new Endpoint(RoomDevice, {
         id,
+        ...numberFor(id),
         bridgedDeviceBasicInformation: {
             nodeLabel: label(room.Name ?? `Room ${room.id}`),
             productName: "Wiser room",
@@ -323,6 +352,7 @@ function addHotWater(hw: any) {
     const id = `hotwater-${hw.id}`;
     const ep = new Endpoint(HotWaterDevice, {
         id,
+        ...numberFor(id),
         bridgedDeviceBasicInformation: {
             nodeLabel: "Hot water",
             productName: "Wiser hot water",
@@ -354,6 +384,7 @@ function addBoost(room: any) {
     const id = `boost-${room.id}`;
     const ep = new Endpoint(HotWaterDevice, {
         id,
+        ...numberFor(id),
         bridgedDeviceBasicInformation: {
             nodeLabel: boostLabel(room),
             productName: "Wiser room boost",
@@ -430,8 +461,7 @@ async function syncBoost(room: any) {
     }
     if (!ep) {
         ep = addBoost(room);
-        await bridge.add(ep);
-        nudgeControllersSoon();
+        await addToBridge(ep);
         watchBoost(room.id, ep);
         log(`added ${boostLabel(room)}`);
     }
@@ -456,6 +486,7 @@ async function syncAlert() {
     if (!alertSensor) {
         alertSensor = new Endpoint(AlertDevice, {
             id: "heating-alert",
+            ...numberFor("heating-alert"),
             bridgedDeviceBasicInformation: {
                 nodeLabel: "Heating alert",
                 productName: "Wiser waste guard alert",
@@ -464,8 +495,7 @@ async function syncAlert() {
             },
             booleanState: { stateValue: !alertState.on },
         });
-        await bridge.add(alertSensor);
-        nudgeControllersSoon();
+        await addToBridge(alertSensor);
         log("added Heating alert");
     }
     if (alertSensor.state.booleanState.stateValue !== !alertState.on) {
@@ -512,8 +542,7 @@ async function syncAlertTexts() {
             booleanState: { stateValue: false }, // open: it only exists while the alert does
         });
         alertTexts.set(id, ep);
-        await bridge.add(ep);
-        nudgeControllersSoon();
+        await addToBridge(ep);
         log(`added alert text device "${text}"`);
     }
 }
@@ -534,6 +563,7 @@ async function syncHours() {
     if (!hoursSensor) {
         hoursSensor = new Endpoint(HoursDevice, {
             id: "heating-hours",
+            ...numberFor("heating-hours"),
             bridgedDeviceBasicInformation: {
                 nodeLabel: HOURS_LABEL,
                 productName: "Wiser heating hours",
@@ -542,8 +572,7 @@ async function syncHours() {
             },
             temperatureMeasurement: { measuredValue: value, minMeasuredValue: 0, maxMeasuredValue: 2400 },
         });
-        await bridge.add(hoursSensor);
-        nudgeControllersSoon();
+        await addToBridge(hoursSensor);
         log("added heating hours sensor");
     } else if (hoursSensor.state.temperatureMeasurement.measuredValue !== value) {
         await hoursSensor.set({ temperatureMeasurement: { measuredValue: value } });
@@ -608,8 +637,7 @@ async function sync() {
         let ep = rooms.get(room.id);
         if (!ep) {
             ep = addRoom(room);
-            await bridge.add(ep);
-            nudgeControllersSoon();
+            await addToBridge(ep);
             watchRoom(room.id, ep);
             log(`added room ${room.Name}`);
         }
@@ -648,8 +676,7 @@ async function sync() {
         let ep = hotWater.get(hw.id);
         if (!ep) {
             ep = addHotWater(hw);
-            await bridge.add(ep);
-            nudgeControllersSoon();
+            await addToBridge(ep);
             watchHotWater(hw.id, ep);
         }
         if (held(`hotwater-${hw.id}`)) continue;
@@ -702,6 +729,10 @@ async function reset() {
     log("removing all pairings");
     online = false;
     clearTimeout(nudgeTimer);
+    numbers.clear();
+    try {
+        writeFileSync(numbersFile, "{}", { mode: 0o600 });
+    } catch {}
     await server.erase();
     await server.start();
     online = true;

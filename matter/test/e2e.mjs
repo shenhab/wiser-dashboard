@@ -310,6 +310,8 @@ check("new settings apply: +2° for 60 min", p?.data.RequestOverride.DurationMin
 bridge.stdin.write(JSON.stringify({ boost: { minutes: 30, delta: 30, off: {} } }) + "\n");
 const back = await until(() => statuses.findLast(s => s.devices === 5), 20_000);
 check("turning it back on brings the switch back", !!back);
+const upperBoostAgain = await until(async () => { const d = await byName("Upper Floor heating boost"); return d && d.number !== upperBoost.number ? null : d; }, 60_000);
+check("the switch comes back with the same endpoint number", upperBoostAgain?.number === upperBoost.number, `${upperBoost.number} -> ${upperBoostAgain?.number}`);
 
 check("the bridge marks its requests for the waste guard", patches.every(x => x.client === "matter"), JSON.stringify(patches.map(x => x.client)));
 

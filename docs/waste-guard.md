@@ -109,9 +109,11 @@ The alarms can also be silenced one by one under Advanced → Alerts, like every
   - `longestOn` finds the longest stretch a schedule keeps a room on; `heatingTotals` adds up the last 24 hours.
 - `guard_run.go` runs after every poll (about every 20 seconds). It keeps the timers in `guard.json` next to the config,
   so a restart or an update doesn't reset them, and appends what it saw and did to `guard.jsonl` (14 days).
-- A device added while the apps are connected shows as offline in Google Home until Google registers it, which took
-  between 3 and 20 minutes in our tests and follows no event at the bridge (Google's hubs receive the device's data
-  within a second, acknowledge it, and start a fresh subscription when asked). The option "Ask the apps to refresh
+- Google Home ties a bridged device to its endpoint number. The library forgets a deleted endpoint's number, so a
+  device added back got a new one and Google showed its old entry as offline until its next rediscovery, 3 to 20
+  minutes later, with no event at the bridge in between (Google's hubs receive the new endpoint's data within a
+  second and acknowledge it). So the bridge remembers each device's number (`endpoint-numbers.json` in its state
+  directory) and asks for it when the device is added back; alert texts are new devices and get new numbers. The option "Ask the apps to refresh
   after adding a device" closes the controllers' sessions politely (CloseSession, as at shutdown) after a device is
   added or removed, so they subscribe again within a minute; it did not shorten the time to "online" in our tests, so
   it's off by default. Devices that exist when the bridge starts are the ones Google keeps online reliably.
