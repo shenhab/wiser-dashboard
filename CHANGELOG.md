@@ -26,6 +26,10 @@ new version's heading.
 - After a restart or an update, the dashboard starts with the last data it had instead of an empty page while the hub
   answers.
 
+### Fixed
+- The Matter bridge no longer logs "ignoring a bad line on stdin" twice at every start: the dashboard's first settings
+  arrived before the bridge was ready and were kept, but the sync they asked for threw.
+
 ### Changed
 - The Matter bridge goes online only once the waste guard's devices are in place, so Google Home can reach them after
   a restart like the rooms.
