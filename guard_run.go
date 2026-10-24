@@ -254,7 +254,7 @@ func (g *Guard) tick(ctx context.Context, now time.Time) {
 		g.alarmSince = map[string]int64{}
 		g.save()
 		g.mu.Unlock()
-		g.srv.matter.SetAlert(MatterAlert{Hours: hours, Refresh: !s.MatterNoRefresh})
+		g.srv.matter.SetAlert(MatterAlert{Hours: hours, Refresh: s.MatterRefresh})
 		return
 	}
 	cmds := g.evaluate(snap, s, now)
@@ -276,7 +276,7 @@ func (g *Guard) tick(ctx context.Context, now time.Time) {
 // while a guard alert is active; optionally up to three devices named with the
 // alerts (the 24 hours' heating first); and optionally the hours sensor.
 func matterAlert(alerts []Alert, off map[string]bool, s GuardSettings, hours *float64) MatterAlert {
-	a := MatterAlert{Enabled: !s.MatterNoAlert, Hours: hours, Refresh: !s.MatterNoRefresh}
+	a := MatterAlert{Enabled: !s.MatterNoAlert, Hours: hours, Refresh: s.MatterRefresh}
 	var texts []MatterText
 	for _, al := range alerts {
 		if al.Level == "info" || off[al.Kind] {

@@ -15,18 +15,18 @@ import (
 
 // GuardSettings are saved in the config file. Zero values mean the defaults.
 type GuardSettings struct {
-	Mode            string          `json:"mode,omitempty"`              // "" off, "watch" (log only) or "on"
-	Minutes         int             `json:"minutes,omitempty"`           // N: heating allowed above the schedule
-	OffTemp         int             `json:"off_temp,omitempty"`          // tenths: where rooms without a schedule go back to
-	Exclude         map[string]bool `json:"exclude,omitempty"`           // "room-2", "hotwater-2" -> left alone
-	SkipOwn         bool            `json:"skip_own,omitempty"`          // don't limit changes made from the dashboard, Matter or MCP
-	OnTemp          int             `json:"on_temp,omitempty"`           // tenths: a schedule at or above this counts as on
-	ScheduleHours   int             `json:"schedule_hours,omitempty"`    // schedule alarm: longest on-stretch allowed
-	DailyHours      int             `json:"daily_hours,omitempty"`       // 24-hour heating limit
-	MatterText      bool            `json:"matter_text,omitempty"`       // show alert texts as devices in Matter apps
-	MatterHours     bool            `json:"matter_hours,omitempty"`      // show the last 24 hours' heating as a temperature sensor
-	MatterNoAlert   bool            `json:"matter_no_alert,omitempty"`   // hide the permanent Heating alert sensor
-	MatterNoRefresh bool            `json:"matter_no_refresh,omitempty"` // don't ask the apps to subscribe again after a device is added
+	Mode          string          `json:"mode,omitempty"`            // "" off, "watch" (log only) or "on"
+	Minutes       int             `json:"minutes,omitempty"`         // N: heating allowed above the schedule
+	OffTemp       int             `json:"off_temp,omitempty"`        // tenths: where rooms without a schedule go back to
+	Exclude       map[string]bool `json:"exclude,omitempty"`         // "room-2", "hotwater-2" -> left alone
+	SkipOwn       bool            `json:"skip_own,omitempty"`        // don't limit changes made from the dashboard, Matter or MCP
+	OnTemp        int             `json:"on_temp,omitempty"`         // tenths: a schedule at or above this counts as on
+	ScheduleHours int             `json:"schedule_hours,omitempty"`  // schedule alarm: longest on-stretch allowed
+	DailyHours    int             `json:"daily_hours,omitempty"`     // 24-hour heating limit
+	MatterText    bool            `json:"matter_text,omitempty"`     // show alert texts as devices in Matter apps
+	MatterHours   bool            `json:"matter_hours,omitempty"`    // show the last 24 hours' heating as a temperature sensor
+	MatterNoAlert bool            `json:"matter_no_alert,omitempty"` // hide the permanent Heating alert sensor
+	MatterRefresh bool            `json:"matter_refresh,omitempty"`  // ask the apps to subscribe again after a device is added (option)
 }
 
 const (
