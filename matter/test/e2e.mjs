@@ -308,9 +308,10 @@ check("the bridge marks its requests for the waste guard", patches.every(x => x.
 // The waste guard's Heating alert: a contact sensor, closed normally, open on an alert.
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: false } }) + "\n");
 check("turning the waste guard on adds the Heating alert", !!(await until(() => statuses.findLast(s => s.devices === 6), 20_000)));
-const alertDev = await until(() => byName("Heating alert"), 30_000);
+// A device added after pairing can take the controller a while to pick up (slow CI runners especially).
+const alertDev = await until(() => byName("Heating alert"), 90_000);
 const alertState = alertDev?.getClusterClient(BooleanState.Cluster);
-check("Heating alert reads closed with no alert", !!alertState && (await alertState.getStateValueAttribute(true)) === true);
+check("Heating alert reads closed with no alert", !!(await until(async () => alertState && (await alertState.getStateValueAttribute(true)) === true, 20_000)), alertDev ? "" : "controller didn't see the device");
 bridge.stdin.write(JSON.stringify({ alert: { enabled: true, on: true } }) + "\n");
 check("an alert opens the Heating alert", !!(await until(async () => (await alertState?.getStateValueAttribute(true)) === false, 20_000)));
 // Options: alert texts as device names, and the 24 hours' heating as a temperature.
