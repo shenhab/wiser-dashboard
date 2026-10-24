@@ -10,5 +10,5 @@ never does, so the controller only re-subscribed at the subscription timeout, ab
 device 30 seconds to resume, then closes the subscription so a new one is established.
 
 Only a matter.js *controller* is affected: the bridge test (`test/e2e.mjs`), not the bridge itself or Google
-Home, Apple Home and Alexa. Proposed upstream as "Subscribe again to a peer that announced a shutdown and does
-not resume the subscription"; drop this patch once a matter.js release includes it.
+Home, Apple Home and Alexa. Proposed upstream in https://github.com/matter-js/matter.js/pull/4834; drop this patch once a
+matter.js release includes it.
