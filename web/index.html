@@ -1900,7 +1900,7 @@ function setupHTML() {
     <div class="field"><label for="sip">Hub address</label>
       <div class="row"><input type="text" id="sip" value="${esc(s.ip)}" placeholder="192.168.x.x" style="flex:1" oninput="S.setup.ip=this.value">
         <button class="btn" onclick="discoverHub()" ${s.discovering ? "disabled" : ""}>${s.discovering ? `<span class="spin"></span>Searching…` : "Find hub"}</button></div>
-      ${(s.candidates || []).map(c => `<div class="cand ${c.ip === s.ip ? "on" : ""}" onclick="S.setup.ip='${c.ip}';render()"><span class="mono">${esc(c.ip)}</span><span class="chip ${c.verified ? "good" : ""}">${c.verified ? esc(c.info || "verified") : "Looks like a Wiser hub"}</span></div>`).join("")}
+      ${(s.candidates || []).map(c => `<div class="cand ${c.ip === s.ip ? "on" : ""}" onclick="S.setup.ip='${c.ip}';render()"><span class="mono">${esc(c.ip)}</span><span class="chip ${c.verified ? "good" : ""}">${esc(c.info || (c.verified ? "verified" : "Looks like a Wiser hub"))}</span></div>`).join("")}
       ${s.scanned && !(s.candidates || []).length ? `<div class="faint small">No hub found nearby. Enter its address (your router's client list shows it as WiserHeat…).</div>` : ""}
     </div>
     <div class="field"><label for="ssec">Secret ${s.hasSecret ? `<span class="chip good">saved</span>` : ""}</label>

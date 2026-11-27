@@ -25,6 +25,12 @@ new version's heading.
   - The rules are in [docs/waste-guard.md](docs/waste-guard.md).
 - After a restart or an update, the dashboard starts with the last data it had instead of an empty page while the hub
   answers.
+- Hubs that refuse plain http and redirect to https (second-generation Wiser hubs) can be connected, and **Find hub**
+  recognises them. Plain http is tried first, as before; when the hub redirects to https the dashboard switches and
+  remembers. Such a hub signs its own certificate, so the dashboard pins it: the first time the hub proves it knows
+  the secret, the certificate is saved and every later connection must show the same one. A hub replaced or reset
+  shows another certificate, and is refused until it is saved again on the setup page. The dashboard finds out
+  how a hub talks before sending it the secret, so the secret isn't sent over plain http to a hub that has https.
 
 ### Fixed
 - A device the Matter bridge adds while the apps are connected (an alert text, a boost switch turned on in settings,

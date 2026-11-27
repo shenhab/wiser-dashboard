@@ -12,6 +12,9 @@ import (
 type Config struct {
 	HubIP  string `json:"hub_ip,omitempty"`
 	Secret string `json:"secret,omitempty"`
+	// HubCert is the SHA-256 of the certificate of a hub that talks https,
+	// trusted when the hub first proved it knows the secret.
+	HubCert string `json:"hub_cert,omitempty"`
 	// ChannelNames are dashboard-only labels for heating channels, keyed by
 	// channel id ("1" -> "Ground Floor"). The hub's own names are untouched.
 	ChannelNames map[string]string `json:"channel_names,omitempty"`

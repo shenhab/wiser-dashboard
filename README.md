@@ -302,7 +302,8 @@ It needs TCP 8080 (dashboard, Home Assistant, MCP), UDP 5540 (Matter) and UDP 53
 ### How it finds the hub and secret
 
 - **Hub:** scans each local /24 network for port 80 answering `401 {"Error":"Unauthorized"}` (the hub doesn't
-  advertise itself), then confirms with the secret.
+  advertise itself), or redirecting to https and answering the same there (second-generation hubs), then confirms
+  with the secret.
 - **Secret:** tries `GET /secret`, which Wiser hubs only answer in setup mode, from their own Wi-Fi at
   `192.168.8.1`. Otherwise paste it on the setup page.
 
@@ -311,6 +312,12 @@ It needs TCP 8080 (dashboard, Home Assistant, MCP), UDP 5540 (Matter) and UDP 53
 - **One connection at a time, about 5 s apart:** every request goes through one queue, commands ahead of polling.
 - **Responses over ~2.7 KB stall** (the hub resends most TCP segments), so `/data/domain/` is never fetched
   whole; sections are polled individually and assembled in the cache.
+- **Hubs that only talk https** (second-generation): plain http is tried first, as with the first-generation hub;
+  when the hub redirects to https the dashboard switches and remembers. Such a hub signs its own certificate, so
+  the dashboard pins it: the first time the hub proves it knows the secret, the certificate is saved (`hub_cert`
+  in the config) and every later connection must show the same one. A hub replaced or reset shows another
+  certificate, and is refused until it's saved again on the setup page. The dashboard finds out how a hub talks
+  before sending it the secret, so the secret isn't sent over plain http to a hub that has https.
 
 ---
 

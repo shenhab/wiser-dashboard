@@ -85,6 +85,7 @@ func main() {
 	var restarting atomic.Bool
 
 	hub := NewHub()
+	hub.trust.setPin(cfg.HubCert)
 	store := NewStore()
 	poller := NewPoller(hub, store)
 	history := NewHistory(filepath.Join(filepath.Dir(*configPath), "history.jsonl"))
@@ -92,6 +93,13 @@ func main() {
 	srv := &Server{hub: hub, store: store, poller: poller, history: history, health: health, configPath: *configPath, password: *password, listen: *listen,
 		labels: cfg.ChannelNames, alertSettings: cfg.Alerts}
 	srv.boost = cfg.Boost.withDefaults()
+	// A hub certificate trusted on first contact is saved with the hub.
+	hub.trust.onChange = func() {
+		ip, secret := hub.Target()
+		if err := srv.save(ip, secret); err != nil {
+			log.Printf("saving the hub certificate: %v", err)
+		}
+	}
 	srv.guard = NewGuard(srv, filepath.Dir(*configPath), cfg.Guard)
 	srv.autoUpdate = cfg.AutoUpdate
 	srv.updater = NewUpdater(filepath.Dir(*configPath), func() { restarting.Store(true); shutdown() }, func() bool {
@@ -157,8 +165,13 @@ func main() {
 // bootstrap fills in whatever is missing: it finds the hub, then tries to
 // fetch its secret. Anything it can't work out is asked for on the setup page.
 func bootstrap(ctx context.Context, srv *Server, cfg Config, allowDiscovery bool) {
+	// Checking the hub before connecting is also what gets an https hub's
+	// certificate trusted, the first time.
+	validate := func() (string, error) {
+		return validateHub(newHubClient(15*time.Second, srv.hub.trust, trustNew), cfg.HubIP, cfg.Secret)
+	}
 	if cfg.HubIP != "" && cfg.Secret != "" {
-		if info, err := validateHub(cfg.HubIP, cfg.Secret); err == nil {
+		if info, err := validate(); err == nil {
 			log.Printf("connected to %s at %s", info, cfg.HubIP)
 			srv.apply(cfg.HubIP, cfg.Secret)
 		} else {
@@ -185,7 +198,7 @@ func bootstrap(ctx context.Context, srv *Server, cfg Config, allowDiscovery bool
 		return
 	}
 	if cfg.Secret == "" {
-		s, from, err := fetchSecret(cfg.HubIP)
+		s, from, err := fetchSecret(newHubClient(10*time.Second, srv.hub.trust, trustNew), cfg.HubIP)
 		if err != nil {
 			log.Printf("hub at %s, but no secret: enter it on the setup page", cfg.HubIP)
 			srv.hub.SetTarget(cfg.HubIP, "")
@@ -193,6 +206,9 @@ func bootstrap(ctx context.Context, srv *Server, cfg Config, allowDiscovery bool
 		}
 		log.Printf("fetched the hub secret from %s", from)
 		cfg.Secret = s
+	}
+	if _, err := validate(); err != nil {
+		log.Printf("hub %s: %v", cfg.HubIP, err)
 	}
 	srv.apply(cfg.HubIP, cfg.Secret)
 }
