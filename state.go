@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +42,13 @@ func (s *Store) Clear() {
 	s.mu.Lock()
 	s.entries = map[string]*Entry{}
 	s.mu.Unlock()
+}
+
+// has reports whether the hub has answered for a section.
+func (s *Store) has(name string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.entries[name] != nil && s.entries[name].Data != nil
 }
 
 func (s *Store) set(name string, data []byte, dur time.Duration) {
@@ -318,6 +326,9 @@ func (p *Poller) fetch(ctx context.Context, name string) {
 	switch {
 	case r.Err != nil:
 		p.store.setError(name, r.Err.Error())
+	case r.Status == http.StatusNotFound && !p.store.has(name):
+		// This hub has no such section (second-generation hubs have neither
+		// Schedule nor opentherm): nothing to show, and nothing wrong.
 	case r.Status != 200:
 		p.store.setError(name, "HTTP "+strconv.Itoa(r.Status)+": "+strings.TrimSpace(string(r.Body)))
 	case !json.Valid(r.Body):
