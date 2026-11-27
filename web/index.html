@@ -412,12 +412,14 @@ function renderStatus() {
   }
   // After a restart the rooms show the data saved before it until the hub answers.
   const restored = st.sections?.Room?.restored;
-  const dot = !st.configured ? "err" : errs || restored ? "busy" : fresh ? "ok" : "busy";
+  // Nothing read and something wrong: say so, rather than "Connecting…" for good.
+  const failing = st.configured && !fresh && !restored && errs > 0;
+  const dot = !st.configured || failing ? "err" : errs || restored ? "busy" : fresh ? "ok" : "busy";
   const theme = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   $("#status").innerHTML = `
     ${st.queue > 0 ? `<span class="chip warn"><span class="spin"></span>${st.queue} sending</span>` : ""}
     <span class="dot ${dot}" title="${esc(st.hubIP || "")}"></span>
-    <span class="txt" ${restored ? `title="The dashboard restarted; this is what it last knew. Controls still work."` : ""}>${!st.configured ? "Not connected" : restored ? `Showing saved data (${ago(st.sections.Room.fetched)}) · waiting for the hub` : fresh ? "Updated " + ago(fresh) : "Connecting…"}</span>
+    <span class="txt" ${restored ? `title="The dashboard restarted; this is what it last knew. Controls still work."` : ""}>${!st.configured ? "Not connected" : restored ? `Showing saved data (${ago(st.sections.Room.fetched)}) · waiting for the hub` : fresh ? "Updated " + ago(fresh) : failing ? "Can't read the hub" : "Connecting…"}</span>
     ${st.update?.busy && st.update.busy !== "checking" ? `<span class="chip warn"><span class="spin"></span>Updating…</span>` : st.update?.available ? `<button class="chip heat" style="border:0;cursor:pointer" onclick="go('advanced','system')" title="Version ${esc(st.update.latest)} is available">Update available</button>` : ""}
     <span class="txt faint xs" title="Wiser Dashboard version">${esc(st.version || "")}</span>
     <button class="icon-btn" title="Switch theme" aria-label="Switch theme" onclick="toggleTheme()" style="width:30px;height:30px">${theme === "dark" ? ICON.sun : ICON.moon}</button>`;
@@ -434,9 +436,23 @@ function render() {
   const v = $("#view");
   if (!S.state) return;
   if (!S.state.configured) v.innerHTML = `<div class="empty"><h2 style="color:var(--ink)">Let's connect to your hub</h2><p>The dashboard needs your Wiser hub's address and secret.</p><button class="btn primary" onclick="openSetup()">Set up</button></div>`;
-  else if (!sec("Room")) v.innerHTML = `<div class="empty"><span class="spin"></span><p>Reading your hub…</p><p class="small">It answers one request about every 5 seconds, so the first load takes ~20 seconds.</p></div>`;
+  // Advanced holds the settings and the hub connection, so it stays reachable
+  // whatever the hub is doing; the other tabs need the hub's rooms.
+  else if (!sec("Room") && S.tab !== "advanced") v.innerHTML = hubWaiting();
   else v.innerHTML = ({home: viewHome, schedules: viewSchedules, insights: viewInsights, devices: viewDevices, advanced: viewAdvanced})[S.tab]();
   renderOverlay();
+}
+// hubWaiting is what the tabs that need rooms show until there are any: a
+// spinner while the hub is being read, and otherwise what is wrong and the
+// way to fix it. It used to spin forever, with the hub connection out of reach.
+function hubWaiting() {
+  const sections = S.state.sections || {};
+  const answered = Object.keys(sections).some(k => k !== "Room" && sections[k].data);
+  const wrong = sections.Room?.error ? "The dashboard can't read the hub" : answered ? "The hub isn't reporting its rooms" : "";
+  if (!wrong) return `<div class="empty"><span class="spin"></span><p>Reading your hub…</p><p class="small">It answers one request about every 5 seconds, so the first load takes ~20 seconds.</p></div>`;
+  return `<div class="empty"><h2 style="color:var(--ink)">${wrong}</h2>
+    ${sections.Room?.error ? `<p class="mono small" style="max-width:640px;overflow-wrap:anywhere">${esc(sections.Room.error)}</p>` : ""}
+    <p class="small">Settings are under Advanced, and so is the hub connection.</p><button class="btn primary" onclick="openSetup()">Hub connection</button></div>`;
 }
 function go(tab, adv) { S.tab = tab; S.edit = null; if (adv) S.adv = adv; localSet("tab", tab); window.scrollTo(0, 0); render(); if (tab === "insights") pollHistory(); if (tab !== "home") pollHealth(); }
 

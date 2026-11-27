@@ -39,6 +39,9 @@ new version's heading.
   endpoint number.
 - The Matter bridge no longer logs "ignoring a bad line on stdin" twice at every start: the dashboard's first settings
   arrived before the bridge was ready and were kept, but the sync they asked for threw.
+- When the hub can't be read (it refuses the secret, its certificate isn't trusted yet, or it doesn't answer), the
+  page said "Reading your hub…" for good and hid every setting, including the hub connection that fixes it. The tabs
+  that need the hub now say what is wrong and offer the hub connection, and Advanced stays available.
 
 ### Changed
 - The Matter bridge goes online only once the waste guard's devices are in place, so Google Home can reach them after
