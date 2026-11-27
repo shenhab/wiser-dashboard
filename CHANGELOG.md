@@ -6,7 +6,7 @@ What changed in each release of Wiser Dashboard. The newest is at the top. Versi
 Every pull request that changes what users see adds a line under **Unreleased**; releasing moves those lines under the
 new version's heading.
 
-## Unreleased
+## 1.7.0 (2026-11-27)
 
 ### Added
 - **Waste guard** (off by default, Advanced → Waste guard). A room turned up by hand above its schedule, with no end
@@ -42,6 +42,8 @@ new version's heading.
 - When the hub can't be read (it refuses the secret, its certificate isn't trusted yet, or it doesn't answer), the
   page said "Reading your hub…" for good and hid every setting, including the hub connection that fixes it. The tabs
   that need the hub now say what is wrong and offer the hub connection, and Advanced stays available.
+- Sections a hub doesn't have (second-generation hubs have neither Schedule nor opentherm) are no longer shown as
+  errors.
 
 ### Changed
 - The Matter bridge goes online only once the waste guard's devices are in place, so Google Home can reach them after
