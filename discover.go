@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -23,11 +24,13 @@ type Candidate struct {
 const setupAPAddress = "192.168.8.1"
 
 // discover scans every local IPv4 /24 for the Wiser fingerprint: port 80
-// answering 401 {"Error":"Unauthorized"}. The hub does not advertise itself
-// over mDNS. With a secret, candidates are confirmed against /data/domain/System.
-func discover(ctx context.Context, secret string) []Candidate {
+// answering 401 {"Error":"Unauthorized"}, or redirecting to https and
+// answering the same there (second-generation hubs). The hub does not
+// advertise itself over mDNS. With a secret, candidates are confirmed against
+// /data/domain/System.
+func discover(ctx context.Context, secret string, t *hubTrust) []Candidate {
 	hosts := scanTargets()
-	client := newHubClient(8 * time.Second) // a busy hub delays connects by ~5s
+	client := newHubClient(8*time.Second, t, trustPinned) // a busy hub delays connects by ~5s
 
 	var (
 		mu    sync.Mutex
@@ -45,12 +48,16 @@ func discover(ctx context.Context, secret string) []Candidate {
 				return
 			}
 			defer func() { <-sem }()
-			if !looksLikeWiser(client, ip) {
+			wiser, https := looksLikeWiser(client, ip)
+			if !wiser {
 				return
 			}
 			c := Candidate{IP: ip}
+			if https {
+				c.Info = "Wiser hub over https. Connect to trust its certificate."
+			}
 			if secret != "" {
-				if info, err := validateHub(ip, secret); err == nil {
+				if info, err := validateHub(client, ip, secret); err == nil {
 					c.Verified, c.Info = true, info
 				}
 			}
@@ -69,9 +76,26 @@ func discover(ctx context.Context, secret string) []Candidate {
 	return found
 }
 
-func looksLikeWiser(c *http.Client, ip string) bool {
-	status, body, err := hubRequest(c, ip, "", "GET", "/", nil)
-	return err == nil && status == http.StatusUnauthorized && strings.Contains(string(body), `"Error":"Unauthorized"`)
+// looksLikeWiser recognises a Wiser hub by what it answers without a secret.
+// Both generations refuse /data/domain/System alike; the second takes only
+// https, redirecting plain http there.
+func looksLikeWiser(c *hubClient, ip string) (wiser, https bool) {
+	status, loc, body, err := c.peek("http://" + ip + "/")
+	if err != nil {
+		return false, false
+	}
+	if status == http.StatusUnauthorized && strings.Contains(string(body), `"Error":"Unauthorized"`) {
+		return true, false
+	}
+	base := httpsBase(status, loc)
+	if base == "" {
+		return false, false
+	}
+	status, _, body, err = c.peek(base + "/data/domain/System")
+	if err != nil || status != http.StatusUnauthorized {
+		return false, false
+	}
+	return strings.Contains(string(body), "Unauthorized"), true
 }
 
 func scanTargets() []string {
@@ -105,10 +129,11 @@ func scanTargets() []string {
 	return out
 }
 
-// validateHub checks that ip/secret really reach a Wiser hub.
-func validateHub(ip, secret string) (string, error) {
-	c := newHubClient(15 * time.Second)
-	status, body, err := hubRequest(c, ip, secret, "GET", "/data/domain/System", nil)
+// validateHub checks that ip/secret really reach a Wiser hub. Over https with
+// a certificate of the hub's own, that proof is also what gets the certificate
+// pinned, on a client that may learn one.
+func validateHub(c *hubClient, ip, secret string) (string, error) {
+	status, body, err := c.request(ip, secret, "GET", "/data/domain/System", nil)
 	if err != nil {
 		return "", err
 	}
@@ -124,29 +149,53 @@ func validateHub(ip, secret string) (string, error) {
 		CloudConnectionState string `json:"CloudConnectionStatus"`
 	}
 	if err := json.Unmarshal(body, &sys); err != nil || sys.ActiveSystemVersion == "" {
-		return "", errors.New("device answered but does not look like a Wiser hub")
+		return "", fmt.Errorf("device answered but does not look like a Wiser hub (HTTP %d: %s)", status, excerpt(body))
+	}
+	if c.mode != trustPinned {
+		if id := c.takeSeen(); id != "" {
+			before := c.trust.pinned()
+			c.trust.pin(id)
+			switch before {
+			case "":
+				log.Printf("hub %s talks https: trusting its certificate (%s)", ip, shortID(id))
+			case id:
+			default:
+				log.Printf("hub %s: its certificate changed from %s to %s; trusting the new one", ip, shortID(before), shortID(id))
+			}
+		}
 	}
 	return strings.TrimSpace(sys.BrandName + " " + sys.ActiveSystemVersion), nil
+}
+
+// excerpt is the start of a reply, on one line, for an error message.
+func excerpt(b []byte) string {
+	s := strings.Join(strings.Fields(string(b)), " ")
+	switch {
+	case s == "":
+		return "an empty reply"
+	case len(s) > 120:
+		return s[:120] + "…"
+	}
+	return s
 }
 
 // fetchSecret tries the hub's /secret endpoint. Wiser hubs only serve it in
 // setup mode, from their own Wi-Fi access point (192.168.8.1), so the LAN
 // address is tried first and the setup AP second.
-func fetchSecret(ip string) (secret, from string, err error) {
-	c := newHubClient(10 * time.Second)
+func fetchSecret(c *hubClient, ip string) (secret, from string, err error) {
 	tried := []string{}
 	for _, host := range uniq(ip, setupAPAddress) {
 		if host == "" {
 			continue
 		}
 		tried = append(tried, host)
-		status, body, rerr := hubRequest(c, host, "", "GET", "/secret", nil)
+		status, body, rerr := c.request(host, "", "GET", "/secret", nil)
 		s := strings.Trim(strings.TrimSpace(string(body)), `"`)
 		if rerr != nil || status != http.StatusOK || s == "" || strings.Contains(s, "Error") {
 			continue
 		}
 		if ip != "" {
-			if _, verr := validateHub(ip, s); verr != nil {
+			if _, verr := validateHub(c, ip, s); verr != nil {
 				continue
 			}
 		}

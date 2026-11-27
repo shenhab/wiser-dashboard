@@ -321,7 +321,7 @@ func (s *Server) runDiscovery(ctx context.Context) []Candidate {
 	s.mu.Unlock()
 
 	_, secret := s.hub.Target()
-	c := discover(ctx, secret)
+	c := discover(ctx, secret, s.hub.trust)
 
 	s.mu.Lock()
 	s.candidates, s.discovering, s.lastScan = c, false, time.Now()
@@ -341,7 +341,7 @@ func (s *Server) handleFetchSecret(w http.ResponseWriter, r *http.Request) {
 	if req.IP == "" {
 		req.IP, _ = s.hub.Target()
 	}
-	secret, from, err := fetchSecret(req.IP)
+	secret, from, err := fetchSecret(newHubClient(10*time.Second, s.hub.trust, trustNew), req.IP)
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -374,7 +374,10 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": "both the hub IP and the secret are needed"})
 		return
 	}
-	info, err := validateHub(req.IP, req.Secret)
+	// The hub is being entered again: ask it afresh how it talks, and let it
+	// show a new certificate if it was replaced or reset.
+	s.hub.trust.forget(req.IP)
+	info, err := validateHub(newHubClient(15*time.Second, s.hub.trust, trustReplace), req.IP, req.Secret)
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": "could not connect: " + err.Error()})
 		return
@@ -403,7 +406,7 @@ func (s *Server) save(ip, secret string) error {
 	}
 	guard := s.guard.Settings()
 	s.mu.Lock()
-	cfg := Config{HubIP: ip, Secret: secret, ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost, Guard: guard, MCPToken: s.mcpToken, AutoUpdate: s.autoUpdate}
+	cfg := Config{HubIP: ip, Secret: secret, HubCert: s.hub.trust.pinned(), ChannelNames: s.labels, Alerts: s.alertSettings, Boost: s.boost, Guard: guard, MCPToken: s.mcpToken, AutoUpdate: s.autoUpdate}
 	err := saveConfig(s.configPath, cfg)
 	s.mu.Unlock()
 	return err
